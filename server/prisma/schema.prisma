@@ -1,0 +1,286 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  INVENTORY_MANAGER
+  WAREHOUSE_STAFF
+}
+
+enum OperationType {
+  RECEIPT
+  DELIVERY
+  INTERNAL_TRANSFER
+  ADJUSTMENT
+}
+
+enum OperationStatus {
+  DRAFT
+  WAITING
+  READY
+  DONE
+  CANCELED
+}
+
+enum PartnerType {
+  SUPPLIER
+  CUSTOMER
+}
+
+enum LocationType {
+  INTERNAL
+  VENDOR
+  CUSTOMER
+  ADJUSTMENT_VIRTUAL
+}
+
+enum OtpPurpose {
+  SIGNUP_VERIFICATION
+  PASSWORD_RESET
+}
+
+model User {
+  id            BigInt    @id @default(autoincrement())
+  login_id      String    @unique @db.VarChar(60)
+  email         String    @unique @db.VarChar(160)
+  full_name     String?   @db.VarChar(120)
+  password_hash String    @db.Text
+  role          UserRole  @default(WAREHOUSE_STAFF)
+  warehouse_id  BigInt?
+  warehouse     Warehouse? @relation(fields: [warehouse_id], references: [id], onDelete: SetNull)
+  phone         String?   @db.VarChar(20)
+  is_verified   Boolean   @default(false)
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now()) @db.Timestamptz
+  updated_at    DateTime  @updatedAt @db.Timestamptz
+
+  otp_verifications      OtpVerification[]
+  created_operations     StockOperation[]    @relation("CreatedOperations")
+  responsible_operations StockOperation[]    @relation("ResponsibleOperations")
+  stock_ledger_entries   StockLedgerEntry[]
+
+  @@map("users")
+}
+
+model OtpVerification {
+  id         BigInt     @id @default(autoincrement())
+  user_id    BigInt
+  user       User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  purpose    OtpPurpose
+  otp_code   String     @db.VarChar(6)
+  expires_at DateTime   @db.Timestamptz
+  is_used    Boolean    @default(false)
+  created_at DateTime   @default(now()) @db.Timestamptz
+
+  @@map("otp_verifications")
+}
+
+model Warehouse {
+  id         BigInt           @id @default(autoincrement())
+  name       String           @db.VarChar(120)
+  code       String           @unique @db.VarChar(20)
+  address    String?          @db.Text
+  is_active  Boolean          @default(true)
+  created_at DateTime         @default(now()) @db.Timestamptz
+  updated_at DateTime         @updatedAt @db.Timestamptz
+
+  locations  Location[]
+  users      User[]
+  operations StockOperation[]
+
+  @@map("warehouses")
+}
+
+model Location {
+  id                 BigInt       @id @default(autoincrement())
+  warehouse_id       BigInt?
+  warehouse          Warehouse?   @relation(fields: [warehouse_id], references: [id], onDelete: Restrict)
+  parent_location_id BigInt?
+  parent_location    Location?    @relation("LocationHierarchy", fields: [parent_location_id], references: [id], onDelete: Restrict)
+  child_locations    Location[]   @relation("LocationHierarchy")
+  name               String       @db.VarChar(120)
+  code               String       @db.VarChar(30)
+  location_type      LocationType
+  is_active          Boolean      @default(true)
+
+  stock_quants           StockQuant[]
+  source_operations      StockOperation[]      @relation("SourceLocation")
+  destination_operations StockOperation[]      @relation("DestinationLocation")
+  stock_adjustment_lines StockAdjustmentLine[]
+  stock_ledger_entries   StockLedgerEntry[]
+
+  @@unique([warehouse_id, code])
+  @@map("locations")
+}
+
+model ProductCategory {
+  id                 BigInt            @id @default(autoincrement())
+  name               String            @db.VarChar(100)
+  parent_category_id BigInt?
+  parent_category    ProductCategory?  @relation("CategoryHierarchy", fields: [parent_category_id], references: [id], onDelete: Restrict)
+  child_categories   ProductCategory[] @relation("CategoryHierarchy")
+
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model UnitOfMeasure {
+  id   BigInt @id @default(autoincrement())
+  name String @db.VarChar(40)
+  code String @unique @db.VarChar(10)
+
+  products               Product[]
+  stock_operation_lines  StockOperationLine[]
+  stock_adjustment_lines StockAdjustmentLine[]
+
+  @@map("units_of_measure")
+}
+
+model Product {
+  id              BigInt          @id @default(autoincrement())
+  name            String          @db.VarChar(150)
+  sku             String          @unique @db.VarChar(60)
+  barcode         String?         @db.VarChar(60)
+  category_id     BigInt
+  category        ProductCategory @relation(fields: [category_id], references: [id], onDelete: Restrict)
+  uom_id          BigInt
+  uom             UnitOfMeasure   @relation(fields: [uom_id], references: [id], onDelete: Restrict)
+  unit_cost       Decimal         @default(0) @db.Decimal(14, 2)
+  description     String?         @db.Text
+  reorder_min_qty Decimal         @default(0) @db.Decimal(14, 3)
+  reorder_max_qty Decimal?        @db.Decimal(14, 3)
+  is_active       Boolean         @default(true)
+  created_at      DateTime        @default(now()) @db.Timestamptz
+  updated_at      DateTime        @updatedAt @db.Timestamptz
+
+  stock_quants           StockQuant[]
+  stock_operation_lines  StockOperationLine[]
+  stock_adjustment_lines StockAdjustmentLine[]
+  stock_ledger_entries   StockLedgerEntry[]
+
+  @@map("products")
+}
+
+model Partner {
+  id        BigInt      @id @default(autoincrement())
+  name      String      @db.VarChar(150)
+  type      PartnerType
+  email     String?     @db.VarChar(160)
+  phone     String?     @db.VarChar(20)
+  address   String?     @db.Text
+  is_active Boolean     @default(true)
+
+  operations StockOperation[]
+
+  @@map("partners")
+}
+
+model StockOperation {
+  id                      BigInt          @id @default(autoincrement())
+  reference_no            String          @unique @db.VarChar(30)
+  operation_type          OperationType
+  status                  OperationStatus @default(DRAFT)
+  warehouse_id            BigInt
+  warehouse               Warehouse       @relation(fields: [warehouse_id], references: [id], onDelete: Restrict)
+  source_location_id      BigInt?
+  source_location         Location?       @relation("SourceLocation", fields: [source_location_id], references: [id], onDelete: Restrict)
+  destination_location_id BigInt?
+  destination_location    Location?       @relation("DestinationLocation", fields: [destination_location_id], references: [id], onDelete: Restrict)
+  partner_id              BigInt?
+  partner                 Partner?        @relation(fields: [partner_id], references: [id], onDelete: Restrict)
+  scheduled_date          DateTime        @db.Timestamptz
+  validated_date          DateTime?       @db.Timestamptz
+  created_by              BigInt
+  creator                 User            @relation("CreatedOperations", fields: [created_by], references: [id], onDelete: Restrict)
+  responsible_user_id     BigInt?
+  responsible_user        User?           @relation("ResponsibleOperations", fields: [responsible_user_id], references: [id], onDelete: SetNull)
+  notes                   String?         @db.Text
+  created_at              DateTime        @default(now()) @db.Timestamptz
+  updated_at              DateTime        @updatedAt @db.Timestamptz
+
+  lines            StockOperationLine[]
+  adjustment_lines StockAdjustmentLine[]
+  ledger_entries   StockLedgerEntry[]
+
+  @@index([operation_type, status])
+  @@index([warehouse_id])
+  @@index([scheduled_date])
+  @@map("stock_operations")
+}
+
+model StockOperationLine {
+  id               BigInt         @id @default(autoincrement())
+  operation_id     BigInt
+  operation        StockOperation @relation(fields: [operation_id], references: [id], onDelete: Cascade)
+  product_id       BigInt
+  product          Product        @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  uom_id           BigInt
+  uom              UnitOfMeasure  @relation(fields: [uom_id], references: [id], onDelete: Restrict)
+  quantity_planned Decimal        @db.Decimal(14, 3)
+  quantity_done    Decimal        @default(0) @db.Decimal(14, 3)
+  notes            String?        @db.Text
+
+  @@index([operation_id])
+  @@index([product_id])
+  @@map("stock_operation_lines")
+}
+
+model StockAdjustmentLine {
+  id                BigInt         @id @default(autoincrement())
+  operation_id      BigInt
+  operation         StockOperation @relation(fields: [operation_id], references: [id], onDelete: Cascade)
+  product_id        BigInt
+  product           Product        @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  location_id       BigInt
+  location          Location       @relation(fields: [location_id], references: [id], onDelete: Restrict)
+  uom_id            BigInt
+  uom               UnitOfMeasure  @relation(fields: [uom_id], references: [id], onDelete: Restrict)
+  recorded_quantity Decimal        @db.Decimal(14, 3)
+  counted_quantity  Decimal        @db.Decimal(14, 3)
+  difference        Decimal        @db.Decimal(14, 3)
+
+  @@map("stock_adjustment_lines")
+}
+
+model StockQuant {
+  id                BigInt   @id @default(autoincrement())
+  product_id        BigInt
+  product           Product  @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  location_id       BigInt
+  location          Location @relation(fields: [location_id], references: [id], onDelete: Restrict)
+  quantity          Decimal  @default(0) @db.Decimal(14, 3)
+  reserved_quantity Decimal  @default(0) @db.Decimal(14, 3)
+  updated_at        DateTime @updatedAt @db.Timestamptz
+
+  @@unique([product_id, location_id])
+  @@map("stock_quants")
+}
+
+model StockLedgerEntry {
+  id              BigInt         @id @default(autoincrement())
+  product_id      BigInt
+  product         Product        @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  location_id     BigInt
+  location        Location       @relation(fields: [location_id], references: [id], onDelete: Restrict)
+  quantity_change Decimal        @db.Decimal(14, 3)
+  balance_after   Decimal        @db.Decimal(14, 3)
+  operation_id    BigInt
+  operation       StockOperation @relation(fields: [operation_id], references: [id], onDelete: Restrict)
+  operation_type  OperationType
+  reference_no    String         @db.VarChar(30)
+  movement_date   DateTime       @db.Timestamptz
+  created_by      BigInt
+  creator         User           @relation(fields: [created_by], references: [id], onDelete: Restrict)
+
+  @@index([product_id])
+  @@index([location_id])
+  @@index([operation_id])
+  @@index([movement_date])
+  @@map("stock_ledger_entries")
+}
