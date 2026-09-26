@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#4338CA" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- Background Container -->
+  <rect width="64" height="64" rx="16" fill="url(#grad)" filter="url(#shadow)"/>
+  
+  <!-- Package Icon (StockSense) -->
+  <path d="M32 14L48 22V42L32 50L16 42V22L32 14Z" stroke="#FFFFFF" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M32 14V32M32 32L48 22M32 32L16 22" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M32 32V50" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Modern Accent Dot -->
+  <circle cx="32" cy="32" r="3" fill="#A5B4FC" />
+</svg>

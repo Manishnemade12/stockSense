@@ -16,7 +16,7 @@ dist-ssr
 .nitro
 *.local
 .env
-plan
+.src-working-backup
 
 # Wrangler / Cloudflare
 .wrangler/
