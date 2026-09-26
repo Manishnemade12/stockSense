@@ -1,16 +1,12 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeftRight,
-  ChevronDown,
   KanbanSquare,
   List,
   Loader2,
   Plus,
-  Printer,
   Search,
-  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +16,7 @@ import {
   validateOperation,
   cancelOperation,
   createOperation,
+  normalizeOpType,
   STATUS_STYLES,
   OP_META,
   type OperationType,
@@ -76,13 +73,16 @@ export const Route = createFileRoute("/_authenticated/operations/$type")({
     status: typeof search["status"] === "string" ? (search["status"] as string) : undefined,
     view: search["view"] === "kanban" ? "kanban" : undefined,
   }),
-  head: ({ params }) => ({
-    meta: [
-      {
-        title: `${OP_META[params.type as OperationType]?.plural ?? "Operations"} — StockSense`,
-      },
-    ],
-  }),
+  head: ({ params }) => {
+    const norm = normalizeOpType(params.type);
+    return {
+      meta: [
+        {
+          title: `${OP_META[norm]?.plural ?? "Operations"} — StockSense`,
+        },
+      ],
+    };
+  },
   component: OperationsListPage,
 });
 
@@ -152,7 +152,7 @@ function useMasters() {
 
 function OperationsListPage() {
   const { type } = Route.useParams();
-  const opType = type as OperationType;
+  const opType = normalizeOpType(type);
   const meta = OP_META[opType];
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -603,6 +603,11 @@ function ActionButtons({
           {isbusy && <Loader2 className="h-3 w-3 animate-spin" />}
           To Do
         </Button>
+      )}
+      {op.status === "WAITING" && (
+        <span className="text-xs text-amber-600 dark:text-amber-400 px-1 self-center">
+          Awaiting stock
+        </span>
       )}
       {op.status === "READY" && (
         <Button

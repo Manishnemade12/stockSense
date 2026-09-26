@@ -19,6 +19,22 @@ export const OP_META: Record<
   ADJUSTMENT: { label: "Adjustment", plural: "Adjustments", code: "ADJ" },
 };
 
+export function normalizeOpType(input?: string): OperationType {
+  if (!input) return "RECEIPT";
+  const upper = input.toUpperCase();
+  if (upper === "RECEIPTS" || upper === "RECEIPT") return "RECEIPT";
+  if (upper === "DELIVERIES" || upper === "DELIVERY") return "DELIVERY";
+  if (
+    upper === "TRANSFERS" ||
+    upper === "TRANSFER" ||
+    upper === "INTERNAL_TRANSFERS" ||
+    upper === "INTERNAL_TRANSFER"
+  )
+    return "INTERNAL_TRANSFER";
+  if (upper === "ADJUSTMENTS" || upper === "ADJUSTMENT") return "ADJUSTMENT";
+  return "RECEIPT";
+}
+
 export const STATUS_STYLES: Record<OperationStatus, string> = {
   DRAFT: "bg-muted text-muted-foreground",
   WAITING: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
