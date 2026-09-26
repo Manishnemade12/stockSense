@@ -48,12 +48,41 @@ export function useIsManager(userId: string | undefined | null) {
     queryKey: ["is-manager", userId],
     enabled: !!userId,
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("has_role", {
-        _user_id: userId!,
-        _role: "INVENTORY_MANAGER",
-      });
-      if (error) throw error;
-      return !!data;
+      try {
+        const { data, error } = await supabase.rpc("has_role", {
+          _user_id: userId!,
+          _role: "INVENTORY_MANAGER",
+        });
+        if (!error && typeof data === "boolean") return data;
+      } catch {
+        // Fallback to direct query below
+      }
+      const { data } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId!)
+        .eq("role", "INVENTORY_MANAGER");
+      return !!(data && data.length > 0);
+    },
+  });
+}
+
+export function useUserRole(userId: string | undefined | null) {
+  return useQuery({
+    queryKey: ["user-role", userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId!)
+        .maybeSingle();
+      const role = (data?.role as AppRole) ?? "WAREHOUSE_STAFF";
+      return {
+        role,
+        isManager: role === "INVENTORY_MANAGER",
+        isStaff: role === "WAREHOUSE_STAFF",
+      };
     },
   });
 }

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Lock, User } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { KeyRound, Loader2, Lock, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/_authenticated/profile")({
   head: () => ({
     meta: [
       { title: "My Profile — StockSense" },
-      { name: "description", content: "View and edit your profile." },
+      { name: "description", content: "View and edit your personal details and password." },
     ],
   }),
   component: ProfilePage,
@@ -45,12 +46,28 @@ function ProfilePage() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwError, setPwError] = useState("");
 
-  // Initialise state from profile when loaded
-  const initialized = fullName !== "" || phone !== "";
-  if (profile && !initialized) {
-    setFullName(profile.full_name ?? "");
-    setPhone(profile.phone ?? "");
-  }
+  // Populate form fields on initial profile load
+  useEffect(() => {
+    if (profile) {
+      setFullName(profile.full_name ?? "");
+      setPhone(profile.phone ?? "");
+    }
+  }, [profile]);
+
+  // Query warehouse name
+  const { data: warehouse } = useQuery({
+    queryKey: ["warehouse", profile?.warehouse_id],
+    enabled: !!profile?.warehouse_id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("warehouses")
+        .select("id, name, code")
+        .eq("id", profile!.warehouse_id!)
+        .single();
+      if (error) return null;
+      return data;
+    },
+  });
 
   async function handleSaveProfile(e: React.FormEvent) {
     e.preventDefault();
@@ -59,13 +76,17 @@ function ProfilePage() {
     try {
       const { error } = await supabase
         .from("profiles")
-        .update({ full_name: fullName.trim() || null, phone: phone.trim() || null })
+        .update({
+          full_name: fullName.trim() || null,
+          phone: phone.trim() || null,
+        })
         .eq("id", userId);
+
       if (error) throw error;
-      toast.success("Profile updated!");
+      toast.success("Profile updated successfully!");
       qc.invalidateQueries({ queryKey: ["profile", userId] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Update failed");
+      toast.error(e instanceof Error ? e.message : "Profile update failed");
     } finally {
       setProfileBusy(false);
     }
@@ -74,27 +95,37 @@ function ProfilePage() {
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault();
     setPwError("");
+
     if (newPassword !== confirmPassword) {
-      setPwError("New password and confirmation do not match.");
+      const err = "New password and confirmation do not match.";
+      setPwError(err);
+      toast.error(err);
       return;
     }
+
     if (newPassword.length < 6) {
-      setPwError("New password must be at least 6 characters.");
+      const err = "New password must be at least 6 characters long.";
+      setPwError(err);
+      toast.error(err);
       return;
     }
+
     setPwBusy(true);
     try {
       // Re-authenticate first to verify current password
       const { data: me } = await supabase.auth.getUser();
-      if (!me.user?.email) throw new Error("Not logged in");
+      if (!me.user?.email) throw new Error("Session expired. Please log in again.");
+
       const { error: signInErr } = await supabase.auth.signInWithPassword({
         email: me.user.email,
         password: currentPassword,
       });
+
       if (signInErr) throw new Error("Current password is incorrect.");
 
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
+
       toast.success("Password changed successfully!");
       setCurrentPassword("");
       setNewPassword("");
@@ -110,9 +141,9 @@ function ProfilePage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4 max-w-xl">
+      <div className="space-y-4 max-w-2xl">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-12 rounded-lg bg-muted animate-pulse" />
+          <div key={i} className="h-32 rounded-lg border bg-card/60 animate-pulse" />
         ))}
       </div>
     );
@@ -123,7 +154,7 @@ function ProfilePage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">My Profile</h1>
         <p className="text-sm text-muted-foreground">
-          Manage your personal details and password.
+          View your assigned account permissions and update your contact information or password.
         </p>
       </div>
 
@@ -135,25 +166,46 @@ function ProfilePage() {
               <User className="h-5 w-5" />
             </div>
             <div>
-              <CardTitle>Account Info</CardTitle>
+              <CardTitle>Account Details</CardTitle>
               <CardDescription>
-                These fields are set by your administrator.
+                System credentials and assigned warehouse permissions.
               </CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <ReadField label="Login Id" value={profile?.login_id ?? "—"} mono />
+          <ReadField label="Login ID" value={profile?.login_id ?? "—"} mono />
           <ReadField label="Email" value={profile?.email ?? "—"} />
-          <ReadField label="Role" value={isManager ? "Inventory Manager" : "Warehouse Staff"} />
-          <ReadField
-            label="Warehouse"
-            value={profile?.warehouse_id ? `Warehouse #${profile.warehouse_id}` : "All Warehouses"}
-          />
-          <ReadField
-            label="Account Status"
-            value={profile?.is_active ? "Active" : "Inactive"}
-          />
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Role</p>
+            <Badge variant="secondary" className="gap-1 font-medium">
+              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+              {isManager ? "Inventory Manager" : "Warehouse Staff"}
+            </Badge>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Assigned Warehouse</p>
+            <p className="text-sm font-medium">
+              {warehouse
+                ? `${warehouse.name} (${warehouse.code})`
+                : profile?.warehouse_id
+                ? `Warehouse #${profile.warehouse_id}`
+                : "All Warehouses"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Account Status</p>
+            <Badge
+              variant="outline"
+              className={
+                profile?.is_active
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
+              }
+            >
+              {profile?.is_active ? "Active" : "Inactive"}
+            </Badge>
+          </div>
         </CardContent>
       </Card>
 
@@ -162,7 +214,7 @@ function ProfilePage() {
         <CardHeader>
           <CardTitle>Personal Details</CardTitle>
           <CardDescription>
-            You can update your name and phone number.
+            Update your full name and phone number for internal communication.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -173,16 +225,16 @@ function ProfilePage() {
                 id="full-name"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder="Your full name"
+                placeholder="Jane Doe"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="phone">Phone</Label>
+              <Label htmlFor="phone">Phone Number</Label>
               <Input
                 id="phone"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="+91 99999 00000"
+                placeholder="+1 (555) 000-0000"
               />
             </div>
             <Button type="submit" disabled={profileBusy}>
@@ -201,9 +253,9 @@ function ProfilePage() {
               <Lock className="h-5 w-5" />
             </div>
             <div>
-              <CardTitle>Change Password</CardTitle>
+              <CardTitle>Security & Password</CardTitle>
               <CardDescription>
-                Confirm your current password before setting a new one.
+                Confirm your current password before setting a new password.
               </CardDescription>
             </div>
           </div>
@@ -211,7 +263,7 @@ function ProfilePage() {
         <CardContent>
           <form onSubmit={handleChangePassword} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="current-pw">Current Password</Label>
+              <Label htmlFor="current-pw">Current Password *</Label>
               <Input
                 id="current-pw"
                 type="password"
@@ -222,17 +274,18 @@ function ProfilePage() {
             </div>
             <Separator />
             <div className="space-y-1.5">
-              <Label htmlFor="new-pw">New Password</Label>
+              <Label htmlFor="new-pw">New Password *</Label>
               <Input
                 id="new-pw"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 6 characters"
                 required
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirm-pw">Confirm New Password</Label>
+              <Label htmlFor="confirm-pw">Confirm New Password *</Label>
               <Input
                 id="confirm-pw"
                 type="password"
@@ -241,15 +294,22 @@ function ProfilePage() {
                   setConfirmPassword(e.target.value);
                   if (pwError) setPwError("");
                 }}
+                placeholder="Re-type new password"
                 required
               />
               {pwError && (
-                <p className="text-xs text-destructive">{pwError}</p>
+                <p className="text-xs font-medium text-destructive mt-1">
+                  {pwError}
+                </p>
               )}
             </div>
-            <Button type="submit" disabled={pwBusy}>
-              {pwBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Change Password
+            <Button type="submit" disabled={pwBusy} className="gap-2">
+              {pwBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
+              Update Password
             </Button>
           </form>
         </CardContent>

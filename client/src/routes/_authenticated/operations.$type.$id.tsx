@@ -438,7 +438,7 @@ function OperationDetailPage() {
             Validate
           </Button>
         )}
-        {!isLocked && (
+        {(!isLocked && (isManager || (op.status === "DRAFT" && op.created_by === userId))) && (
           <Button
             variant="outline"
             disabled={busy}
