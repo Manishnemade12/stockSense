@@ -3,6 +3,8 @@ import cors from 'cors';
 import { errorHandler } from './middleware/error.middleware.js';
 import { sendSuccess, sendError } from './utils/response.js';
 
+import { authRoutes } from './modules/auth/auth.routes.js';
+
 // Polyfill BigInt serialization in JSON responses
 (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function () {
   return Number(this);
@@ -24,8 +26,8 @@ export const createApp = (): Express => {
     });
   });
 
-  // Future feature routes will be mounted here in subsequent phases:
-  // app.use('/auth', authRoutes);
+  // Feature routes
+  app.use('/auth', authRoutes);
   // app.use('/warehouses', warehouseRoutes);
   // app.use('/locations', locationRoutes);
   // app.use('/categories', categoryRoutes);
