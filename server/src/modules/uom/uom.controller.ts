@@ -1,0 +1,53 @@
+import { Request, Response, NextFunction } from 'express';
+import { UomService } from './uom.service.js';
+import { sendSuccess, sendList } from '../../utils/response.js';
+
+export class UomController {
+  static async create(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await UomService.create(req.body);
+      sendSuccess(res, result, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { items, meta } = await UomService.getAll(req.query as any);
+      sendList(res, items, meta);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = BigInt(req.params.id);
+      const result = await UomService.getById(id);
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async update(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = BigInt(req.params.id);
+      const result = await UomService.update(id, req.body);
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = BigInt(req.params.id);
+      const result = await UomService.delete(id);
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+}
