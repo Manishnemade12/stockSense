@@ -4,7 +4,7 @@
 
 ---
 
-## 🎙️ Project Overview & Team Credits
+## 🌟 Project Overview & Team Credits
 
 **StockSense** was architected and developed by **Manish Nemade** and **Abhay** as a state-of-the-art warehouse operating system designed to eradicate phantom inventory, mis-picks, and un-audited stock adjustments.
 
@@ -91,7 +91,7 @@ client/
 │   │
 │   └── routes/                   # File-Based TanStack Route Architecture
 │       ├── __root.tsx            # Global layout shell, QueryClient provider, theme context, Sonner toasts
-│       ├── index.tsx             # Public landing page with pitch highlights, architecture, & 1-click demo logins
+│       ├── index.tsx             # Public landing page with system architecture preview & 1-click demo logins
 │       ├── auth.tsx              # Split authentication hub (Login, Sign-Up, OTP verification, Forgot Password)
 │       ├── reset-password.tsx    # Standalone token-based password reset gateway
 │       └── _authenticated/       # Authenticated layout wrapper (App Sidebar + Station Pinning)

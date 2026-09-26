@@ -233,7 +233,6 @@ npm run dev
 ### 4. Access the Application
 - Open **`http://localhost:8080/`** in your browser.
 - Use the **1-Click Copy** buttons on the landing page or enter demo credentials (`admin` / `Admin@1234` or `staff` / `User@1234`).
-- For the full presentation script and pitch flow, refer to [PITCH.md](PITCH.md).
 
 ---
 
