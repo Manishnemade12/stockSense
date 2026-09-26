@@ -26,6 +26,7 @@ import {
 import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { OperationStatusBadge } from "@/components/operation-status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -483,11 +484,7 @@ function ListView({
                   : "—"}
               </TableCell>
               <TableCell>
-                <Badge
-                  className={cn("border-0", STATUS_STYLES[op.status as OperationStatus])}
-                  >
-                  {op.status}
-                </Badge>
+                <OperationStatusBadge status={op.status} />
               </TableCell>
               <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                 <ActionButtons
@@ -543,9 +540,7 @@ function KanbanView({
       {statuses.map((s) => (
         <div key={s} className="flex-shrink-0 w-64">
           <div className="mb-2 flex items-center justify-between">
-            <Badge className={cn("border-0", STATUS_STYLES[s])}>
-              {s}
-            </Badge>
+            <OperationStatusBadge status={s} />
             <span className="text-xs text-muted-foreground">
               {grouped[s].length}
             </span>
