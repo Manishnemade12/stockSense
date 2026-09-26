@@ -207,12 +207,14 @@ function AuthPage() {
   }
 
   async function handleResendSignupOtp() {
-    if (!suLoginId.trim() && !suEmail.trim()) return;
+    const ident = suLoginId.trim() || suEmail.trim();
+    if (!ident) return;
     if (resendCooldown > 0) return;
     setBusy(true);
     try {
-      const res = await api.post<{ message: string; otp_code?: string }>("/auth/forgot-password", {
-        login_id: suLoginId.trim() || suEmail.trim(),
+      const res = await api.post<{ message: string; otp_code?: string }>("/auth/resend-otp", {
+        identifier: ident,
+        purpose: "SIGNUP_VERIFICATION",
       });
       toast.success(
         res?.otp_code
@@ -222,6 +224,29 @@ function AuthPage() {
       setResendCooldown(60);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not resend code");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResendForgotOtp() {
+    const ident = forgotIdentifier.trim();
+    if (!ident) return;
+    if (resendCooldown > 0) return;
+    setBusy(true);
+    try {
+      const res = await api.post<{ message: string; otp_code?: string }>("/auth/resend-otp", {
+        identifier: ident,
+        purpose: "PASSWORD_RESET",
+      });
+      toast.success(
+        res?.otp_code
+          ? `Reset code resent! (Dev OTP: ${res.otp_code})`
+          : `Reset code resent for ${ident}`
+      );
+      setResendCooldown(60);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not resend reset code");
     } finally {
       setBusy(false);
     }
@@ -838,7 +863,7 @@ function AuthPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={handleForgotStep1}
+                        onClick={handleResendForgotOtp}
                         disabled={busy || resendCooldown > 0}
                         className="text-primary hover:underline disabled:text-muted-foreground"
                       >

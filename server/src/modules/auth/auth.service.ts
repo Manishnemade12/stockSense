@@ -4,6 +4,7 @@ import { UserRole, OtpPurpose } from '@prisma/client';
 import { prisma } from '../../prisma/client.js';
 import { env } from '../../config/env.js';
 import { Errors } from '../../utils/errors.js';
+import { EmailService } from '../../services/email.service.js';
 import {
   SignupInput,
   VerifySignupOtpInput,
@@ -11,6 +12,7 @@ import {
   ForgotPasswordInput,
   VerifyResetOtpInput,
   ResetPasswordInput,
+  ResendOtpInput,
 } from './auth.schema.js';
 
 export class AuthService {
@@ -54,6 +56,9 @@ export class AuthService {
         is_used: false,
       },
     });
+
+    // Dispatch OTP via Resend Email Service
+    await EmailService.sendSignupVerificationOtp(user.email, otpCode, user.login_id);
 
     return {
       user: {
@@ -179,6 +184,9 @@ export class AuthService {
       },
     });
 
+    // Dispatch Reset OTP via Resend Email Service
+    await EmailService.sendPasswordResetOtp(user.email, otpCode, user.login_id);
+
     return {
       message: 'Password reset OTP sent to registered email address.',
       otp_code: otpCode,
@@ -252,6 +260,71 @@ export class AuthService {
 
     return {
       message: 'Password updated successfully. You can now log in with your new password.',
+    };
+  }
+
+  static async resendOtp(dto: ResendOtpInput) {
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [{ login_id: dto.identifier }, { email: dto.identifier }],
+      },
+    });
+
+    if (!user) {
+      throw Errors.notFound('User not found with the provided identifier');
+    }
+
+    if (!user.is_active) {
+      throw Errors.forbidden('Your account has been deactivated. Please contact administrator.');
+    }
+
+    const purpose =
+      dto.purpose === 'PASSWORD_RESET'
+        ? OtpPurpose.PASSWORD_RESET
+        : OtpPurpose.SIGNUP_VERIFICATION;
+
+    if (purpose === OtpPurpose.SIGNUP_VERIFICATION && user.is_verified) {
+      return {
+        message: 'Account is already verified. You can log in directly.',
+      };
+    }
+
+    // Invalidate previous pending OTPs
+    await prisma.otpVerification.updateMany({
+      where: {
+        user_id: user.id,
+        purpose,
+        is_used: false,
+      },
+      data: {
+        is_used: true,
+      },
+    });
+
+    // Generate new OTP
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await prisma.otpVerification.create({
+      data: {
+        user_id: user.id,
+        purpose,
+        otp_code: otpCode,
+        expires_at: expiresAt,
+        is_used: false,
+      },
+    });
+
+    // Dispatch Resent OTP via Resend Email Service
+    if (purpose === OtpPurpose.PASSWORD_RESET) {
+      await EmailService.sendPasswordResetOtp(user.email, otpCode, user.login_id);
+    } else {
+      await EmailService.sendSignupVerificationOtp(user.email, otpCode, user.login_id);
+    }
+
+    return {
+      message: 'New OTP code has been generated and sent.',
+      otp_code: otpCode,
     };
   }
 

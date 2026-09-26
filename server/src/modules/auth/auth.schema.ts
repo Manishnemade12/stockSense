@@ -63,9 +63,22 @@ export const ResetPasswordSchema = z.object({
   }),
 });
 
+export const ResendOtpSchema = z.object({
+  body: z.object({
+    identifier: z
+      .string({ required_error: 'identifier (login_id or email) is required' })
+      .trim()
+      .min(1, 'identifier cannot be empty'),
+    purpose: z
+      .enum(['SIGNUP_VERIFICATION', 'PASSWORD_RESET'])
+      .default('SIGNUP_VERIFICATION'),
+  }),
+});
+
 export type SignupInput = z.infer<typeof SignupSchema>['body'];
 export type VerifySignupOtpInput = z.infer<typeof VerifySignupOtpSchema>['body'];
 export type LoginInput = z.infer<typeof LoginSchema>['body'];
 export type ForgotPasswordInput = z.infer<typeof ForgotPasswordSchema>['body'];
 export type VerifyResetOtpInput = z.infer<typeof VerifyResetOtpSchema>['body'];
 export type ResetPasswordInput = z.infer<typeof ResetPasswordSchema>['body'];
+export type ResendOtpInput = z.infer<typeof ResendOtpSchema>['body'];

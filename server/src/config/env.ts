@@ -10,6 +10,8 @@ const envSchema = z.object({
   JWT_RESET_EXPIRES_IN: z.string().default('15m'),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().default('StockSense <onboarding@resend.dev>'),
 });
 
 const parseEnv = () => {

@@ -57,6 +57,15 @@ export class AuthController {
     }
   }
 
+  static async resendOtp(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await AuthService.resendOtp(req.body);
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getMe(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const result = await AuthService.getMe(req.user!.userId);
