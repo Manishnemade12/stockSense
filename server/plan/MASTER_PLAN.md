@@ -26,10 +26,10 @@ StockSense is a modular Inventory Management System. The backend exposes a REST 
 | Phase | Name | Est. Time | Priority |
 |---|---|---|---|
 | 01 | ✅ Project Foundation & Infrastructure | 30 min | P0 |
-| 02 | Authentication & User Management | 60 min | P0 |
+| 02 | ✅ Authentication & User Management | 60 min | P0 |
 | 03 | ✅ Master Data (Warehouse, Location, Category, UoM, Partners) | 45 min | P0 |
-| 04 | Product Management | 45 min | P0 |
-| 05 | Stock Quants & Stock State | 30 min | P0 |
+| 04 | ✅ Product Management | 45 min | P0 |
+| 05 | ✅ Stock Quants & Stock State | 30 min | P0 |
 | 06 | Operations Core (CRUD + Status Engine) | 90 min | P0 |
 | 07 | Receipts | 30 min | P0 |
 | 08 | Deliveries | 30 min | P0 |
