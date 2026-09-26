@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   Loader2,
   Plus,
   Printer,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -16,6 +18,8 @@ import {
   validateOperation,
   cancelOperation,
   updateOperation,
+  createOperation,
+  normalizeOpType,
   STATUS_STYLES,
   OP_META,
   type OperationType,
@@ -62,13 +66,16 @@ import {
 } from "@/components/ui/table";
 
 export const Route = createFileRoute("/_authenticated/operations/$type/$id")({
-  head: ({ params }) => ({
-    meta: [
-      {
-        title: `${OP_META[params.type as OperationType]?.label ?? "Operation"} Detail — StockSense`,
-      },
-    ],
-  }),
+  head: ({ params }) => {
+    const norm = normalizeOpType(params.type);
+    return {
+      meta: [
+        {
+          title: `${OP_META[norm]?.label ?? "Operation"} Detail — StockSense`,
+        },
+      ],
+    };
+  },
   component: OperationDetailPage,
 });
 
@@ -89,11 +96,26 @@ function useProducts() {
   });
 }
 
+function useLocations() {
+  return useQuery({
+    queryKey: ["locations"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("locations")
+        .select("id,name,code,location_type,warehouse_id")
+        .eq("is_active", true)
+        .order("name");
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
 // ─── Detail Page ──────────────────────────────────────────────────────────────
 
 function OperationDetailPage() {
   const { type, id } = Route.useParams();
-  const opType = type as OperationType;
+  const opType = normalizeOpType(type);
   const opId = Number(id);
   const meta = OP_META[opType];
   const navigate = useNavigate();
@@ -103,9 +125,19 @@ function OperationDetailPage() {
 
   const [busy, setBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmValidate, setConfirmValidate] = useState(false);
   const [qtyDoneEdits, setQtyDoneEdits] = useState<Record<number, string>>({});
   const [adjCountedEdits, setAdjCountedEdits] = useState<Record<number, string>>({});
+  // Inline new-line form
+  const [addingLine, setAddingLine] = useState(false);
+  const [newLineProductId, setNewLineProductId] = useState("");
+  const [newLineQty, setNewLineQty] = useState("1");
+  const [newLineLocationId, setNewLineLocationId] = useState(""); // for ADJUSTMENT
+  const [deletingLineId, setDeletingLineId] = useState<number | null>(null);
+
   const { data: products } = useProducts();
+  const { data: allLocations } = useLocations();
+  const internalLocs = (allLocations ?? []).filter((l) => l.location_type === "INTERNAL");
 
   const { data: op, isLoading, error } = useQuery({
     queryKey: ["operation", opId],
@@ -230,11 +262,95 @@ function OperationDetailPage() {
     setAdjCountedEdits({});
   }
 
+  // Rule 2: block validate if ALL lines have qty_done = 0
+  function handleValidateClick() {
+    if (opType !== "ADJUSTMENT") {
+      const opLines = op?.stock_operation_lines ?? [];
+      const allZero = opLines.length > 0 && opLines.every(
+        (l: any) => {
+          const edited = qtyDoneEdits[l.id];
+          const val = edited !== undefined ? Number(edited) : Number(l.quantity_done ?? 0);
+          return val === 0;
+        }
+      );
+      if (allZero) {
+        toast.error("Cannot validate — all lines have Qty Done = 0. Enter at least one quantity.");
+        return;
+      }
+    }
+    setConfirmValidate(true);
+  }
+
+  // Add a new product line to an existing DRAFT/READY operation
+  async function handleAddLine() {
+    if (!newLineProductId) {
+      toast.error("Select a product");
+      return;
+    }
+    const qtyVal = Number(newLineQty);
+    if (isNaN(qtyVal) || qtyVal <= 0) {
+      toast.error("Enter a valid quantity > 0");
+      return;
+    }
+    setBusy(true);
+    try {
+      const linePayload: any = {
+        product_id: Number(newLineProductId),
+        quantity_planned: qtyVal,
+      };
+      if (opType === "ADJUSTMENT" && newLineLocationId) {
+        linePayload.location_id = Number(newLineLocationId);
+        linePayload.counted_quantity = qtyVal;
+      }
+      await updateOperation(opId, { lines: [linePayload] });
+      toast.success("Product line added");
+      qc.invalidateQueries({ queryKey: ["operation", opId] });
+      setAddingLine(false);
+      setNewLineProductId("");
+      setNewLineQty("1");
+      setNewLineLocationId("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to add line");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Delete a line from the operation
+  async function handleDeleteLine(lineId: number) {
+    setBusy(true);
+    try {
+      if (opType === "ADJUSTMENT") {
+        const { error } = await supabase
+          .from("stock_adjustment_lines")
+          .delete()
+          .eq("id", lineId)
+          .eq("operation_id", opId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("stock_operation_lines")
+          .delete()
+          .eq("id", lineId)
+          .eq("operation_id", opId);
+        if (error) throw error;
+      }
+      toast.success("Line removed");
+      qc.invalidateQueries({ queryKey: ["operation", opId] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove line");
+    } finally {
+      setBusy(false);
+      setDeletingLineId(null);
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-10 w-64" />
         <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -255,6 +371,11 @@ function OperationDetailPage() {
       </div>
     );
   }
+
+  const currentLines =
+    opType === "ADJUSTMENT"
+      ? op.stock_adjustment_lines ?? []
+      : op.stock_operation_lines ?? [];
 
   return (
     <div className="space-y-6">
@@ -278,58 +399,66 @@ function OperationDetailPage() {
             Late
           </Badge>
         )}
+        {isLocked && (
+          <Badge variant="outline" className="ml-auto text-muted-foreground">
+            {isDone ? "Read-only — Validated" : "Read-only — Canceled"}
+          </Badge>
+        )}
       </div>
 
       {/* Short stock alert for Delivery/Transfer */}
       {hasShortLines && !isLocked && (
         <div className="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          Some items are out of stock at the source location. This operation
-          will go to WAITING on confirm.
+          <span>
+            <strong>⚠️ Some items are out of stock at the source location.</strong>{" "}
+            Confirming this operation will set status to <strong>WAITING</strong> until stock becomes available.
+          </span>
         </div>
       )}
 
       {/* Action Buttons */}
-      {!isLocked && (
-        <div className="flex flex-wrap gap-2">
-          {op.status === "DRAFT" && (
-            <Button
-              disabled={busy}
-              onClick={() => run(() => confirmOperation(opId).then(() => {}), "Status → READY (or WAITING)")}
-            >
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              To Do
-            </Button>
-          )}
-          {op.status === "READY" && (
-            <Button
-              disabled={busy}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={() => run(() => validateOperation(opId), "Validated — stock updated!")}
-            >
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Validate
-            </Button>
-          )}
+      <div className="flex flex-wrap gap-2">
+        {!isLocked && op.status === "DRAFT" && (
+          <Button
+            disabled={busy}
+            onClick={() => run(() => confirmOperation(opId).then(() => {}), "Status → READY (or WAITING)")}
+          >
+            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            ✅ To Do (Confirm)
+          </Button>
+        )}
+        {!isLocked && op.status === "READY" && (
+          <Button
+            disabled={busy}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+            onClick={handleValidateClick}
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Validate
+          </Button>
+        )}
+        {!isLocked && (
           <Button
             variant="outline"
             disabled={busy}
             className="text-destructive border-destructive/40 hover:bg-destructive/10"
             onClick={() => setConfirmCancel(true)}
           >
+            <X className="mr-1.5 h-4 w-4" />
             Cancel Operation
           </Button>
-        </div>
-      )}
-      {isDone && (
-        <Button
-          variant="outline"
-          onClick={() => window.print()}
-          className="gap-2"
-        >
-          <Printer className="h-4 w-4" /> Print Slip
-        </Button>
-      )}
+        )}
+        {isDone && (
+          <Button
+            variant="outline"
+            onClick={() => window.print()}
+            className="gap-2"
+          >
+            <Printer className="h-4 w-4" /> Print Slip
+          </Button>
+        )}
+      </div>
 
       {/* Details Card */}
       <Card>
@@ -374,6 +503,7 @@ function OperationDetailPage() {
           onEdit={setAdjCountedEdits}
           onSave={handleSaveAdjCounted}
           busy={busy}
+          onDeleteLine={(id) => setDeletingLineId(id)}
         />
       ) : (
         <OperationLinesTable
@@ -384,8 +514,142 @@ function OperationDetailPage() {
           onEdit={setQtyDoneEdits}
           onSave={handleSaveQtyDone}
           busy={busy}
+          onDeleteLine={(id) => setDeletingLineId(id)}
         />
       )}
+
+      {/* Inline Add Line */}
+      {!isLocked && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between py-3">
+            <CardTitle className="text-sm text-muted-foreground">Add Product Line</CardTitle>
+            {!addingLine && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => setAddingLine(true)}
+              >
+                <Plus className="h-3.5 w-3.5" /> New Product
+              </Button>
+            )}
+          </CardHeader>
+          {addingLine && (
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap gap-2 items-end">
+                <div className="flex-1 min-w-48 space-y-1">
+                  <Label className="text-xs">Product *</Label>
+                  <Select value={newLineProductId} onValueChange={setNewLineProductId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select product" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(products ?? []).map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}{" "}
+                          <span className="text-muted-foreground text-xs">[{p.sku}]</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {opType === "ADJUSTMENT" && (
+                  <div className="w-44 space-y-1">
+                    <Label className="text-xs">Location *</Label>
+                    <Select value={newLineLocationId} onValueChange={setNewLineLocationId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Location" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {internalLocs.map((l) => (
+                          <SelectItem key={l.id} value={String(l.id)}>
+                            {l.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="w-28 space-y-1">
+                  <Label className="text-xs">
+                    {opType === "ADJUSTMENT" ? "Counted Qty *" : "Qty Planned *"}
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    value={newLineQty}
+                    onChange={(e) => setNewLineQty(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-1.5 pb-0.5">
+                  <Button size="sm" onClick={handleAddLine} disabled={busy} className="gap-1">
+                    {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Add
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setAddingLine(false);
+                      setNewLineProductId("");
+                      setNewLineQty("1");
+                      setNewLineLocationId("");
+                    }}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
+
+      {/* Delete Line Confirm */}
+      <AlertDialog open={deletingLineId !== null} onOpenChange={(o) => !o && setDeletingLineId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this line?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This product line will be permanently removed from the operation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deletingLineId && handleDeleteLine(deletingLineId)}
+            >
+              Remove line
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Validate Confirm */}
+      <AlertDialog open={confirmValidate} onOpenChange={setConfirmValidate}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Validate this operation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will mark the operation as DONE and write the stock changes.
+              This action is <strong>irreversible</strong>.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Review first</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={() =>
+                run(() => validateOperation(opId), "Validated — stock updated!")
+              }
+            >
+              Yes, Validate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Cancel Confirm */}
       <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
@@ -424,6 +688,7 @@ function OperationLinesTable({
   onEdit,
   onSave,
   busy,
+  onDeleteLine,
 }: {
   lines: any[];
   opType: OperationType;
@@ -432,15 +697,17 @@ function OperationLinesTable({
   onEdit: (e: Record<number, string>) => void;
   onSave: () => void;
   busy: boolean;
+  onDeleteLine: (id: number) => void;
 }) {
   const hasEdits = Object.keys(edits).length > 0;
+  const showShortCol = opType === "DELIVERY" || opType === "INTERNAL_TRANSFER";
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">Products</CardTitle>
         {!isLocked && hasEdits && (
-          <Button size="sm" onClick={onSave} disabled={busy}>
+          <Button size="sm" onClick={onSave} disabled={busy} className="gap-1">
             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save quantities
           </Button>
@@ -452,20 +719,21 @@ function OperationLinesTable({
             <TableRow>
               <TableHead>Product</TableHead>
               <TableHead className="text-right">Qty Planned</TableHead>
-              {!isLocked && <TableHead className="text-right">Qty Done</TableHead>}
-              {(opType === "DELIVERY" || opType === "INTERNAL_TRANSFER") && (
+              <TableHead className="text-right">Qty Done</TableHead>
+              {showShortCol && (
                 <TableHead className="text-right">Available</TableHead>
               )}
+              {!isLocked && <TableHead className="w-10" />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {lines.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={showShortCol ? 5 : 4}
                   className="text-center text-muted-foreground py-8"
                 >
-                  No product lines
+                  No product lines — add one below.
                 </TableCell>
               </TableRow>
             ) : (
@@ -493,21 +761,28 @@ function OperationLinesTable({
                   <TableCell className="text-right">
                     {Number(line.quantity_planned).toLocaleString()}
                   </TableCell>
-                  {!isLocked && (
-                    <TableCell className="text-right">
+                  <TableCell className="text-right">
+                    {isLocked ? (
+                      <span className={cn(Number(line.quantity_done) > 0 ? "font-semibold" : "text-muted-foreground")}>
+                        {Number(line.quantity_done ?? 0).toLocaleString()}
+                      </span>
+                    ) : (
                       <Input
                         type="number"
                         min="0"
                         step="0.001"
-                        className="w-24 ml-auto text-right"
+                        className={cn(
+                          "w-24 ml-auto text-right",
+                          line.is_short && "border-destructive focus-visible:ring-destructive",
+                        )}
                         value={edits[line.id] ?? line.quantity_done ?? "0"}
                         onChange={(e) =>
                           onEdit({ ...edits, [line.id]: e.target.value })
                         }
                       />
-                    </TableCell>
-                  )}
-                  {(opType === "DELIVERY" || opType === "INTERNAL_TRANSFER") && (
+                    )}
+                  </TableCell>
+                  {showShortCol && (
                     <TableCell
                       className={cn(
                         "text-right",
@@ -515,6 +790,19 @@ function OperationLinesTable({
                       )}
                     >
                       {line.available_at_source ?? "—"}
+                    </TableCell>
+                  )}
+                  {!isLocked && (
+                    <TableCell>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() => onDeleteLine(line.id)}
+                        title="Remove line"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </TableCell>
                   )}
                 </TableRow>
@@ -534,6 +822,7 @@ function AdjustmentLinesTable({
   onEdit,
   onSave,
   busy,
+  onDeleteLine,
 }: {
   lines: any[];
   isLocked: boolean;
@@ -541,6 +830,7 @@ function AdjustmentLinesTable({
   onEdit: (e: Record<number, string>) => void;
   onSave: () => void;
   busy: boolean;
+  onDeleteLine: (id: number) => void;
 }) {
   const hasEdits = Object.keys(edits).length > 0;
 
@@ -549,7 +839,7 @@ function AdjustmentLinesTable({
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">Adjustment Lines</CardTitle>
         {!isLocked && hasEdits && (
-          <Button size="sm" onClick={onSave} disabled={busy}>
+          <Button size="sm" onClick={onSave} disabled={busy} className="gap-1">
             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save counts
           </Button>
@@ -564,16 +854,17 @@ function AdjustmentLinesTable({
               <TableHead className="text-right">Recorded Qty</TableHead>
               <TableHead className="text-right">Counted Qty</TableHead>
               <TableHead className="text-right">Difference</TableHead>
+              {!isLocked && <TableHead className="w-10" />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {lines.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="text-center text-muted-foreground py-8"
                 >
-                  No adjustment lines
+                  No adjustment lines — add one below.
                 </TableCell>
               </TableRow>
             ) : (
@@ -627,6 +918,19 @@ function AdjustmentLinesTable({
                     >
                       {diff > 0 ? `+${diff}` : diff === 0 ? "0" : diff}
                     </TableCell>
+                    {!isLocked && (
+                      <TableCell>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => onDeleteLine(line.id)}
+                          title="Remove line"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })
