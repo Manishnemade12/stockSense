@@ -10,6 +10,7 @@ import { categoryRoutes } from './modules/categories/categories.routes.js';
 import { uomRoutes } from './modules/uom/uom.routes.js';
 import { partnerRoutes } from './modules/partners/partners.routes.js';
 import { productRoutes } from './modules/products/products.routes.js';
+import { receiptRoutes } from './modules/receipts/receipts.routes.js';
 
 // Polyfill BigInt serialization in JSON responses
 (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function () {
@@ -40,7 +41,7 @@ export const createApp = (): Express => {
   app.use('/uom', uomRoutes);
   app.use('/partners', partnerRoutes);
   app.use('/products', productRoutes);
-  // app.use('/receipts', receiptRoutes);
+  app.use('/receipts', receiptRoutes);
   // app.use('/deliveries', deliveryRoutes);
   // app.use('/transfers', transferRoutes);
   // app.use('/adjustments', adjustmentRoutes);
