@@ -22,9 +22,10 @@ import {
   User,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { useProfile, useSessionUserId } from "@/lib/auth";
+import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -47,12 +48,11 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 const NAV_ITEMS = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/products", label: "Products", icon: Package },
-  { to: "/move-history", label: "Move History", icon: History },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, managerOnly: false },
+  { to: "/products", label: "Products", icon: Package, managerOnly: false },
+  { to: "/move-history", label: "Move History", icon: History, managerOnly: false },
+  { to: "/settings", label: "Settings", icon: Settings, managerOnly: true },
 ] as const;
-
 
 const OP_ITEMS = [
   { type: "RECEIPT" as const, label: "Receipts", icon: PackageOpen },
@@ -66,6 +66,7 @@ function AuthenticatedLayout() {
   const queryClient = useQueryClient();
   const userId = useSessionUserId();
   const { data: profile } = useProfile(userId);
+  const { data: isManager } = useIsManager(userId);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const opsActive = pathname.startsWith("/operations");
 
@@ -79,6 +80,9 @@ function AuthenticatedLayout() {
   const initials = (profile?.full_name || profile?.login_id || "?")
     .slice(0, 2)
     .toUpperCase();
+
+  // Filter navigation items based on role (Settings is strictly manager-only)
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.managerOnly || isManager);
 
   return (
     <div className="min-h-screen bg-background">
@@ -94,7 +98,7 @@ function AuthenticatedLayout() {
           </Link>
 
           <nav className="flex flex-1 items-center gap-1 overflow-x-auto">
-            {NAV_ITEMS.slice(0, 1).map((item) => (
+            {visibleNavItems.slice(0, 1).map((item) => (
               <NavLink key={item.to} item={item} pathname={pathname} />
             ))}
             <DropdownMenu>
@@ -127,7 +131,7 @@ function AuthenticatedLayout() {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            {NAV_ITEMS.slice(1).map((item) => (
+            {visibleNavItems.slice(1).map((item) => (
               <NavLink key={item.to} item={item} pathname={pathname} />
             ))}
           </nav>
@@ -144,10 +148,21 @@ function AuthenticatedLayout() {
                 </Avatar>
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuLabel>
-                <p className="font-medium">{profile?.full_name || profile?.login_id}</p>
-                <p className="text-xs font-normal text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium truncate">{profile?.full_name || profile?.login_id}</p>
+                  <Badge
+                    variant={isManager ? "default" : "secondary"}
+                    className={cn(
+                      "text-[10px] px-1.5 py-0 h-4 shrink-0 font-medium",
+                      isManager ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {isManager ? "Admin" : "Staff"}
+                  </Badge>
+                </div>
+                <p className="text-xs font-normal text-muted-foreground truncate">
                   {profile?.email}
                 </p>
               </DropdownMenuLabel>

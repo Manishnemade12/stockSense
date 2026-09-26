@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { STATUS_STYLES, type OperationType, type OperationStatus } from "@/lib/stocksense";
-import { useProfile, useSessionUserId } from "@/lib/auth";
+import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,9 +73,16 @@ function DashboardPage() {
   const navigate = useNavigate();
   const userId = useSessionUserId();
   const { data: profile } = useProfile(userId);
+  const { data: isManager } = useIsManager(userId);
 
-  // Warehouse scoping filter (all or specific warehouse)
+  // Warehouse scoping filter:
+  // For Manager: can view "ALL" or choose specific warehouse
+  // For Staff (§3): strictly locked to own-warehouse scope (users.warehouse_id)
   const [warehouseFilter, setWarehouseFilter] = useState<string>("ALL");
+
+  const effectiveWarehouseId = isManager
+    ? (warehouseFilter === "ALL" ? null : Number(warehouseFilter))
+    : (profile?.warehouse_id ? Number(profile.warehouse_id) : 1);
 
   // 1. Fetch Warehouses for dropdown
   const { data: warehouses } = useQuery({
@@ -97,7 +104,7 @@ function DashboardPage() {
     isLoading: opsLoading,
     refetch: refetchOps,
   } = useQuery({
-    queryKey: ["dashboard-operations", warehouseFilter],
+    queryKey: ["dashboard-operations", effectiveWarehouseId],
     queryFn: async () => {
       let query = supabase
         .from("stock_operations")
@@ -115,8 +122,8 @@ function DashboardPage() {
         `)
         .order("created_at", { ascending: false });
 
-      if (warehouseFilter !== "ALL") {
-        query = query.eq("warehouse_id", Number(warehouseFilter));
+      if (effectiveWarehouseId !== null) {
+        query = query.eq("warehouse_id", effectiveWarehouseId);
       }
 
       const { data, error } = await query;
@@ -131,7 +138,7 @@ function DashboardPage() {
     isLoading: stockLoading,
     refetch: refetchStock,
   } = useQuery({
-    queryKey: ["dashboard-stock-kpis", warehouseFilter],
+    queryKey: ["dashboard-stock-kpis", effectiveWarehouseId],
     queryFn: async () => {
       // Products
       const { data: products, error: pErr } = await supabase
@@ -148,14 +155,14 @@ function DashboardPage() {
       const { data: quants, error: qErr } = await quantsQuery;
       if (qErr) throw qErr;
 
-      // Filter quants by warehouse if selected
+      // Filter quants by effective warehouse if selected
       const filteredQuants =
-        warehouseFilter === "ALL"
+        effectiveWarehouseId === null
           ? quants
           : quants.filter(
               (q: any) =>
                 q.location &&
-                String(q.location.warehouse_id) === String(warehouseFilter),
+                Number(q.location.warehouse_id) === Number(effectiveWarehouseId),
             );
 
       // Quantities per product
@@ -280,35 +287,55 @@ function DashboardPage() {
       {/* Top Header & Warehouse Scoping */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-            Inventory Dashboard
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+              {isManager ? "Inventory Management Dashboard" : "Warehouse Operations Dashboard"}
+            </h1>
+            <Badge
+              variant={isManager ? "default" : "secondary"}
+              className="text-xs font-medium"
+            >
+              {isManager ? "Manager View" : "Staff View"}
+            </Badge>
+          </div>
           <p className="text-sm text-muted-foreground">
-            Live overview of warehouse stock, pending movements, and operational metrics.
+            {isManager
+              ? "Live overview of multi-warehouse stock, pending movements, and operational metrics."
+              : "Active station for order picking, shipments, internal transfers, and stock audits."}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Warehouse filter dropdown */}
-          <div className="flex items-center gap-1.5">
-            <Warehouse className="h-4 w-4 text-muted-foreground" />
-            <Select
-              value={warehouseFilter}
-              onValueChange={setWarehouseFilter}
-            >
-              <SelectTrigger className="w-[180px] h-9 text-xs">
-                <SelectValue placeholder="All Warehouses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Warehouses</SelectItem>
-                {warehouses?.map((wh) => (
-                  <SelectItem key={wh.id} value={String(wh.id)}>
-                    {wh.name} ({wh.code})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {/* Warehouse scoping: Dropdown for Manager, Fixed Station for Staff */}
+          {isManager ? (
+            <div className="flex items-center gap-1.5">
+              <Warehouse className="h-4 w-4 text-muted-foreground" />
+              <Select
+                value={warehouseFilter}
+                onValueChange={setWarehouseFilter}
+              >
+                <SelectTrigger className="w-[180px] h-9 text-xs">
+                  <SelectValue placeholder="All Warehouses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Warehouses</SelectItem>
+                  {warehouses?.map((wh) => (
+                    <SelectItem key={wh.id} value={String(wh.id)}>
+                      {wh.name} ({wh.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-primary font-medium">
+              <Warehouse className="h-4 w-4" />
+              <span>
+                {warehouses?.find((w) => w.id === effectiveWarehouseId)?.name ||
+                  "Central Warehouse (WH1)"}
+              </span>
+            </div>
+          )}
 
           <Button
             variant="outline"
@@ -798,21 +825,34 @@ function DashboardPage() {
       {/* ─── Quick Actions & Shortcuts ───────────────────────────────────── */}
       <Card className="border-border/60 bg-card/40 backdrop-blur">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base font-semibold">Quick Actions</CardTitle>
+          <CardTitle className="text-base font-semibold">
+            {isManager ? "Management Quick Actions" : "Warehouse Tasks & Actions"}
+          </CardTitle>
           <CardDescription className="text-xs">
-            Frequently performed warehouse tasks and shortcuts
+            {isManager
+              ? "Frequently performed inventory tasks, PO receipts, and operational shortcuts."
+              : "Active warehouse tasks permitted for warehouse staff."}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Link
-              to="/operations/$type"
-              params={{ type: "RECEIPT" }}
-              className="flex items-center gap-2 rounded-lg border border-border/70 p-3 text-xs font-medium transition-all hover:bg-accent hover:border-primary/40"
-            >
-              <PackageOpen className="h-4 w-4 text-primary" />
-              <span>New Receipt</span>
-            </Link>
+          <div
+            className={cn(
+              "grid gap-3",
+              isManager
+                ? "grid-cols-2 sm:grid-cols-4"
+                : "grid-cols-1 sm:grid-cols-3"
+            )}
+          >
+            {isManager && (
+              <Link
+                to="/operations/$type"
+                params={{ type: "RECEIPT" }}
+                className="flex items-center gap-2 rounded-lg border border-border/70 p-3 text-xs font-medium transition-all hover:bg-accent hover:border-primary/40"
+              >
+                <PackageOpen className="h-4 w-4 text-primary" />
+                <span>New Receipt (PO)</span>
+              </Link>
+            )}
             <Link
               to="/operations/$type"
               params={{ type: "DELIVERY" }}
