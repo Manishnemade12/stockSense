@@ -7,6 +7,7 @@ import {
   Loader2,
   Plus,
   Search,
+  Warehouse,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +23,7 @@ import {
   type OperationType,
   type OperationStatus,
 } from "@/lib/stocksense";
-import { useSessionUserId } from "@/lib/auth";
+import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -157,6 +158,9 @@ function OperationsListPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const userId = useSessionUserId();
+  const { data: profile } = useProfile(userId);
+  const { data: isManager } = useIsManager(userId);
+  const canCreate = isManager || opType !== "RECEIPT";
 
   const searchParams = Route.useSearch();
   const [search, setSearch] = useState("");
@@ -171,10 +175,11 @@ function OperationsListPage() {
     if (searchParams.view) setView(searchParams.view);
   }, [searchParams.status, searchParams.view]);
 
+  // Per §3: Staff operations are scoped to their own warehouse
   const { data: ops, isLoading } = useQuery({
-    queryKey: ["operations", opType],
+    queryKey: ["operations", opType, isManager ? "ALL" : profile?.warehouse_id],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("stock_operations")
         .select(`
           *,
@@ -185,6 +190,12 @@ function OperationsListPage() {
         `)
         .eq("operation_type", opType)
         .order("created_at", { ascending: false });
+
+      if (!isManager) {
+        query = query.eq("warehouse_id", profile?.warehouse_id || 1);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       return data as any[];
     },
@@ -247,14 +258,23 @@ function OperationsListPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{meta.plural}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight">{meta.plural}</h1>
+            {!isManager && (
+              <Badge variant="outline" className="text-xs font-normal">
+                Station: Central Warehouse (WH1)
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             Manage all {meta.plural.toLowerCase()} and their status.
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> New {meta.label}
-        </Button>
+        {canCreate && (
+          <Button onClick={() => setShowCreate(true)} className="gap-2">
+            <Plus className="h-4 w-4" /> New {meta.label}
+          </Button>
+        )}
       </div>
 
       {/* Toolbar */}
@@ -313,6 +333,8 @@ function OperationsListPage() {
           ops={filtered}
           opType={opType}
           busy={busy}
+          isManager={!!isManager}
+          userId={userId}
           onConfirm={handleConfirm}
           onValidate={handleValidate}
           onCancel={(id) => setCancelTarget(id)}
@@ -324,6 +346,8 @@ function OperationsListPage() {
           statuses={statuses}
           opType={opType}
           busy={busy}
+          isManager={!!isManager}
+          userId={userId}
           onConfirm={handleConfirm}
           onValidate={handleValidate}
           onCancel={(id) => setCancelTarget(id)}
@@ -336,6 +360,8 @@ function OperationsListPage() {
         <CreateOperationDialog
           opType={opType}
           userId={userId}
+          isManager={!!isManager}
+          profileWarehouseId={profile?.warehouse_id}
           onClose={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false);
@@ -378,6 +404,8 @@ function ListView({
   ops,
   opType,
   busy,
+  isManager,
+  userId,
   onConfirm,
   onValidate,
   onCancel,
@@ -386,6 +414,8 @@ function ListView({
   ops: any[];
   opType: OperationType;
   busy: Record<number, boolean>;
+  isManager: boolean;
+  userId?: string | undefined;
   onConfirm: (id: number) => void;
   onValidate: (id: number) => void;
   onCancel: (id: number) => void;
@@ -455,7 +485,7 @@ function ListView({
               <TableCell>
                 <Badge
                   className={cn("border-0", STATUS_STYLES[op.status as OperationStatus])}
-                >
+                  >
                   {op.status}
                 </Badge>
               </TableCell>
@@ -463,6 +493,8 @@ function ListView({
                 <ActionButtons
                   op={op}
                   busy={busy}
+                  isManager={isManager}
+                  userId={userId}
                   onConfirm={onConfirm}
                   onValidate={onValidate}
                   onCancel={onCancel}
@@ -483,6 +515,8 @@ function KanbanView({
   statuses,
   opType,
   busy,
+  isManager,
+  userId,
   onConfirm,
   onValidate,
   onCancel,
@@ -492,6 +526,8 @@ function KanbanView({
   statuses: OperationStatus[];
   opType: OperationType;
   busy: Record<number, boolean>;
+  isManager: boolean;
+  userId?: string | undefined;
   onConfirm: (id: number) => void;
   onValidate: (id: number) => void;
   onCancel: (id: number) => void;
@@ -552,6 +588,8 @@ function KanbanView({
                     <ActionButtons
                       op={op}
                       busy={busy}
+                      isManager={isManager}
+                      userId={userId}
                       onConfirm={onConfirm}
                       onValidate={onValidate}
                       onCancel={onCancel}
@@ -577,6 +615,8 @@ function ActionButtons({
   onValidate,
   onCancel,
   compact = false,
+  isManager = true,
+  userId,
 }: {
   op: any;
   busy: Record<number, boolean>;
@@ -584,11 +624,16 @@ function ActionButtons({
   onValidate: (id: number) => void;
   onCancel: (id: number) => void;
   compact?: boolean;
+  isManager?: boolean;
+  userId?: string | undefined;
 }) {
   const isbusy = busy[op.id];
   const size = compact ? "sm" : "sm";
 
   if (op.status === "DONE" || op.status === "CANCELED") return null;
+
+  // Per §3: Manager can cancel any non-done operation. Staff can only cancel their own drafts.
+  const canCancel = isManager || (op.status === "DRAFT" && op.created_by === userId);
 
   return (
     <div className={cn("flex gap-1", compact ? "flex-col" : "justify-end")}>
@@ -620,16 +665,18 @@ function ActionButtons({
           Validate
         </Button>
       )}
-      <Button
-        size={size}
-        variant="ghost"
-        disabled={isbusy}
-        onClick={() => onCancel(op.id)}
-        className="gap-1 text-destructive hover:text-destructive"
-      >
-        <X className="h-3 w-3" />
-        {!compact && "Cancel"}
-      </Button>
+      {canCancel && (
+        <Button
+          size={size}
+          variant="ghost"
+          disabled={isbusy}
+          onClick={() => onCancel(op.id)}
+          className="gap-1 text-destructive hover:text-destructive"
+        >
+          <X className="h-3 w-3" />
+          {!compact && "Cancel"}
+        </Button>
+      )}
     </div>
   );
 }
@@ -639,11 +686,15 @@ function ActionButtons({
 function CreateOperationDialog({
   opType,
   userId,
+  isManager,
+  profileWarehouseId,
   onClose,
   onCreated,
 }: {
   opType: OperationType;
   userId: string | undefined;
+  isManager: boolean;
+  profileWarehouseId?: number | null | undefined;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -651,7 +702,9 @@ function CreateOperationDialog({
   const { warehouses, locations, partners, products } = useMasters();
   const [busy, setBusy] = useState(false);
 
-  const [warehouseId, setWarehouseId] = useState("");
+  const [warehouseId, setWarehouseId] = useState(
+    !isManager && profileWarehouseId ? String(profileWarehouseId) : "1",
+  );
   const [srcLocationId, setSrcLocationId] = useState("");
   const [dstLocationId, setDstLocationId] = useState("");
   const [partnerId, setPartnerId] = useState("");
@@ -755,18 +808,29 @@ function CreateOperationDialog({
           {/* Warehouse */}
           <div className="space-y-1.5">
             <Label>Warehouse *</Label>
-            <Select value={warehouseId} onValueChange={setWarehouseId} required>
-              <SelectTrigger>
-                <SelectValue placeholder="Select warehouse" />
-              </SelectTrigger>
-              <SelectContent>
-                {(warehouses.data ?? []).map((w) => (
-                  <SelectItem key={w.id} value={String(w.id)}>
-                    {w.name} ({w.code})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {isManager ? (
+              <Select value={warehouseId} onValueChange={setWarehouseId} required>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select warehouse" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(warehouses.data ?? []).map((w) => (
+                    <SelectItem key={w.id} value={String(w.id)}>
+                      {w.name} ({w.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
+                <Warehouse className="h-4 w-4" />
+                <span>
+                  {(warehouses.data ?? []).find(
+                    (w) => String(w.id) === (profileWarehouseId ? String(profileWarehouseId) : "1"),
+                  )?.name || "Central Warehouse (WH1)"}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Partner (Receipt = Supplier, Delivery = Customer) */}

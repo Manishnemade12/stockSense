@@ -22,7 +22,7 @@ import {
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { setStock } from "@/lib/stocksense";
-import { useIsManager, useSessionUserId } from "@/lib/auth";
+import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -186,6 +186,7 @@ function useMasterMetadata() {
 
 function ProductsPage() {
   const userId = useSessionUserId();
+  const { data: profile } = useProfile(userId);
   const { data: isManager } = useIsManager(userId);
 
   const [activeTab, setActiveTab] = useState<"products" | "stock">("products");
@@ -282,7 +283,11 @@ function ProductsPage() {
 
         {/* Tab 2: Live Stock Sub-Tab (§3.3, §6.3) */}
         <TabsContent value="stock" className="mt-4">
-          <StockSubViewTab search={search} isManager={!!isManager} />
+          <StockSubViewTab
+            search={search}
+            isManager={!!isManager}
+            staffWarehouseId={!isManager ? (profile?.warehouse_id ?? 1) : null}
+          />
         </TabsContent>
       </Tabs>
 
@@ -386,7 +391,7 @@ function ProductsCatalogTab({
               <TableHead className="text-right font-semibold">Unit Cost</TableHead>
               <TableHead className="text-right font-semibold">Reorder Min</TableHead>
               <TableHead className="font-semibold">Status</TableHead>
-              <TableHead className="text-right font-semibold">Actions</TableHead>
+              {isManager && <TableHead className="text-right font-semibold">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -400,12 +405,12 @@ function ProductsCatalogTab({
                   <TableCell><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                  <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+                  {isManager && <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>}
                 </TableRow>
               ))
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-12 text-center text-muted-foreground">
+                <TableCell colSpan={isManager ? 8 : 7} className="py-12 text-center text-muted-foreground">
                   <Package className="mx-auto h-8 w-8 mb-2 opacity-40" />
                   <p className="font-medium">No products match your criteria.</p>
                   <p className="text-xs mt-1">Try changing your search term or category filter.</p>
@@ -477,44 +482,42 @@ function ProductsCatalogTab({
                     </Badge>
                   </TableCell>
 
-                  {/* Actions */}
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {isManager && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0"
-                            title="Edit Product"
-                            onClick={() => onEdit(p)}
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
+                  {/* Actions (Manager only) */}
+                  {isManager && (
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          title="Edit Product"
+                          onClick={() => onEdit(p)}
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </Button>
 
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className={cn(
-                              "h-8 px-2 text-xs",
-                              p.is_active
-                                ? "text-destructive hover:text-destructive hover:bg-destructive/10"
-                                : "text-primary hover:bg-primary/10",
-                            )}
-                            disabled={toggleActiveMutation.isPending}
-                            onClick={() =>
-                              toggleActiveMutation.mutate({
-                                id: p.id,
-                                is_active: !p.is_active,
-                              })
-                            }
-                          >
-                            {p.is_active ? "Archive" : "Restore"}
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-8 px-2 text-xs",
+                            p.is_active
+                              ? "text-destructive hover:text-destructive hover:bg-destructive/10"
+                              : "text-primary hover:bg-primary/10",
+                          )}
+                          disabled={toggleActiveMutation.isPending}
+                          onClick={() =>
+                            toggleActiveMutation.mutate({
+                              id: p.id,
+                              is_active: !p.is_active,
+                            })
+                          }
+                        >
+                          {p.is_active ? "Archive" : "Restore"}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))
             )}
@@ -530,9 +533,11 @@ function ProductsCatalogTab({
 function StockSubViewTab({
   search,
   isManager,
+  staffWarehouseId,
 }: {
   search: string;
   isManager: boolean;
+  staffWarehouseId?: number | null | undefined;
 }) {
   const queryClient = useQueryClient();
   const { data: stockQuants, isLoading } = useStockQuants();
@@ -541,9 +546,12 @@ function StockSubViewTab({
   const [edits, setEdits] = useState<Record<number, string>>({});
   const [savingRowId, setSavingRowId] = useState<number | null>(null);
 
-  // Filter stock rows by product name or SKU
+  // Filter stock rows by product name, SKU, and scope by warehouse for staff
   const filteredRows = useMemo(() => {
     return (stockQuants ?? []).filter((r: any) => {
+      if (!isManager && staffWarehouseId && r.locations?.warehouse_id !== staffWarehouseId) {
+        return false;
+      }
       const pName = r.products?.name?.toLowerCase() ?? "";
       const pSku = r.products?.sku?.toLowerCase() ?? "";
       const locName = r.locations?.name?.toLowerCase() ?? "";
@@ -557,14 +565,14 @@ function StockSubViewTab({
         whName.includes(q)
       );
     });
-  }, [stockQuants, search]);
+  }, [stockQuants, search, isManager, staffWarehouseId]);
 
   // Total stock summary metrics
   const summary = useMemo(() => {
     let totalOnHand = 0;
     let totalReserved = 0;
 
-    for (const r of stockQuants ?? []) {
+    for (const r of filteredRows) {
       totalOnHand += Number(r.quantity) || 0;
       totalReserved += Number(r.reserved_quantity) || 0;
     }
@@ -574,7 +582,7 @@ function StockSubViewTab({
       totalReserved,
       totalFree: totalOnHand - totalReserved,
     };
-  }, [stockQuants]);
+  }, [filteredRows]);
 
   // Save inline adjustment via set_stock RPC (§6.3, §8 rule 5)
   // NEVER write to stock_quants directly!
