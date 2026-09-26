@@ -28,6 +28,7 @@ import {
 import { useIsManager, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { OperationStatusBadge } from "@/components/operation-status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -390,9 +391,7 @@ function OperationDetailPage() {
         <h1 className="text-xl font-bold font-mono tracking-tight">
           {op.reference_no ?? `New ${meta.label}`}
         </h1>
-        <Badge className={cn("border-0", STATUS_STYLES[op.status as OperationStatus])}>
-          {op.status}
-        </Badge>
+        <OperationStatusBadge status={op.status} size="default" />
         {op.scheduled_date && new Date(op.scheduled_date) < new Date() &&
           op.status !== "DONE" && op.status !== "CANCELED" && (
           <Badge className="border-0 bg-orange-500/15 text-orange-600 dark:text-orange-400">
