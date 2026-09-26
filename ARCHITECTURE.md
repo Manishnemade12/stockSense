@@ -22,13 +22,13 @@ Inventory is never created or destroyed arbitrarily. Every stock modification re
 ## 2. High-Level Architecture Diagram
 
 ```mermaid
-graph TB
-    subgraph Client Tier ["Client Tier (React 19 + TypeScript)"]
+flowchart TB
+    subgraph ClientTier ["Client Tier (React 19 + TypeScript)"]
         UI_Landing["Landing Page (/)"]
         UI_Auth["Auth & OTP Wizard (/auth)"]
         UI_Dash["Dashboard & KPIs (/dashboard)"]
         UI_Ops["Operations Grid & Kanban (/operations/$type)"]
-        UI_Detail["Operation Detail & Validator (/operations/$type/$id)"]
+        UI_Detail["Operation Detail (/operations/$type/$id)"]
         UI_Prod["Products & Stock Breakdown (/products)"]
         UI_Ledger["Stock Move Ledger (/move-history)"]
         UI_Settings["Master Data & RBAC Settings (/settings)"]
@@ -37,17 +37,16 @@ graph TB
         Auth_State["Auth Session Store (JWT in LocalStorage)"]
     end
 
-    subgraph Gateway Tier ["Gateway Tier (Vite Proxy + Express)"]
-        Proxy["Vite Dev Proxy: /api ➔ http://localhost:5000"]
+    subgraph GatewayTier ["Gateway Tier (Vite Proxy + Express)"]
+        Proxy["Vite Dev Proxy (/api to http://localhost:5000)"]
         Express["Express.js Server (Port 5000)"]
         Auth_Middleware["authenticate (JWT Validation)"]
-        RBAC_Middleware["requireRole(INVENTORY_MANAGER)"]
-        Zod_Middleware["validate(ZodSchema)"]
-        Response_Util["sendSuccess / sendList / sendError"]
+        RBAC_Middleware["requireRole (Role Guard)"]
+        Zod_Middleware["validate (Zod Schema)"]
     end
 
-    subgraph Service Tier ["Service Tier (Business Logic & State Machines)"]
-        S_Auth["AuthService (Bcrypt, JWT, OTP Verification)"]
+    subgraph ServiceTier ["Service Tier (Business Logic & State Machines)"]
+        S_Auth["AuthService (Bcrypt, JWT, OTP)"]
         S_Email["EmailService (Resend Email API)"]
         S_Ops["OperationService (Confirm, Reserve, Validate, Cancel)"]
         S_Stock["StockService (Quant Management, Availability Math)"]
@@ -56,20 +55,37 @@ graph TB
         S_Master["MasterDataService (Warehouses, Locations, Partners)"]
     end
 
-    subgraph Data Tier ["Data Tier (Prisma + PostgreSQL)"]
+    subgraph DataTier ["Data Tier (Prisma + PostgreSQL)"]
         Prisma["Prisma ORM 5.22"]
-        Postgres[("PostgreSQL 15 Database (stocksense)")]
+        Postgres[("PostgreSQL Database (stocksense)")]
     end
 
-    UI_Landing & UI_Auth & UI_Dash & UI_Ops & UI_Detail & UI_Prod & UI_Ledger & UI_Settings --> API_Client
+    UI_Landing --> API_Client
+    UI_Auth --> API_Client
+    UI_Dash --> API_Client
+    UI_Ops --> API_Client
+    UI_Detail --> API_Client
+    UI_Prod --> API_Client
+    UI_Ledger --> API_Client
+    UI_Settings --> API_Client
     API_Client --> Auth_State
-    API_Client -->|HTTP / JSON| Proxy
+    API_Client --> Proxy
     Proxy --> Express
     Express --> Auth_Middleware
     Auth_Middleware --> Zod_Middleware
     Zod_Middleware --> RBAC_Middleware
-    RBAC_Middleware --> S_Auth & S_Ops & S_Stock & S_Prod & S_Ledger & S_Master
-    S_Auth & S_Ops & S_Stock & S_Prod & S_Ledger & S_Master --> Prisma
+    RBAC_Middleware --> S_Auth
+    RBAC_Middleware --> S_Ops
+    RBAC_Middleware --> S_Stock
+    RBAC_Middleware --> S_Prod
+    RBAC_Middleware --> S_Ledger
+    RBAC_Middleware --> S_Master
+    S_Auth --> Prisma
+    S_Ops --> Prisma
+    S_Stock --> Prisma
+    S_Prod --> Prisma
+    S_Ledger --> Prisma
+    S_Master --> Prisma
     Prisma --> Postgres
 ```
 
@@ -79,32 +95,13 @@ graph TB
 
 ```mermaid
 stateDiagram-v2
-    direction TB
-    [*] --> DRAFT : User Creates Operation
-    DRAFT --> WAITING : confirmOperation()
-    note right of WAITING
-      Availability checked:
-      FreeQty = OnHand - Reserved
-      If FreeQty >= PlannedQty:
-      Reserved += PlannedQty
-    end note
-    
-    WAITING --> READY : Auto-promoted if stock fully reserved
-    WAITING --> CANCELED : cancelOperation() (Zero reservations held)
-    
-    READY --> DONE : validateOperation()
-    note right of DONE
-      - Decrement Source Quant
-      - Increment Destination Quant
-      - Release Reserved Qty
-      - Commit StockLedgerEntry
-    end note
-
-    READY --> CANCELED : cancelOperation()
-    note right of CANCELED
-      - Release all reserved stock
-      - Revert line reservation flags
-    end note
+    [*] --> DRAFT : Create Operation
+    DRAFT --> WAITING : Confirm Operation
+    WAITING --> READY : Stock Fully Reserved
+    READY --> DONE : Validate and Finalize
+    WAITING --> CANCELED : Cancel (Release Reserved)
+    READY --> CANCELED : Cancel (Release Reserved)
+    DRAFT --> CANCELED : Cancel Operation
 ```
 
 ### Mathematical Invariants

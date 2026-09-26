@@ -28,7 +28,7 @@ graph LR
     end
 
     subgraph DevProxy ["Vite Dev Server (:8080)"]
-        Proxy["Reverse Proxy (/api ➔ :5000)"]
+        Proxy["Reverse Proxy (/api to :5000)"]
     end
 
     subgraph Backend ["StockSense Backend (:5000)"]
