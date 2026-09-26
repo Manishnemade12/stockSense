@@ -2,6 +2,7 @@ import { LocationType, OperationType, OperationStatus, Prisma } from '@prisma/cl
 import { prisma } from '../../prisma/client.js';
 import { Errors } from '../../utils/errors.js';
 import { StockService } from '../operations/stock.service.js';
+import { ReferenceService } from '../operations/reference.service.js';
 import {
   CreateProductInput,
   UpdateProductInput,
@@ -101,15 +102,11 @@ export class ProductService {
         await StockService.increment(tx, product.id, locationId, initialQty);
 
         if (dto.initial_stock_quantity > 0) {
-          // Generate sequence for opening adjustment
-          const count = await tx.stockOperation.count({
-            where: {
-              warehouse_id: warehouseId,
-              operation_type: OperationType.ADJUSTMENT,
-            },
-          });
-          const seq = (count + 1).toString().padStart(4, '0');
-          const referenceNo = `${warehouseCode}/ADJ/${seq}`;
+          const referenceNo = await ReferenceService.generate(
+            tx,
+            warehouseCode,
+            OperationType.ADJUSTMENT
+          );
 
           const now = new Date();
 
@@ -431,14 +428,11 @@ export class ProductService {
 
       if (!difference.isZero()) {
         const warehouseCode = location.warehouse?.code || 'WH';
-        const count = await tx.stockOperation.count({
-          where: {
-            warehouse_id: location.warehouse_id!,
-            operation_type: OperationType.ADJUSTMENT,
-          },
-        });
-        const seq = (count + 1).toString().padStart(4, '0');
-        const referenceNo = `${warehouseCode}/ADJ/${seq}`;
+        const referenceNo = await ReferenceService.generate(
+          tx,
+          warehouseCode,
+          OperationType.ADJUSTMENT
+        );
         const now = new Date();
 
         const operation = await tx.stockOperation.create({

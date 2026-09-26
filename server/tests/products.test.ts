@@ -34,6 +34,8 @@ vi.mock('../src/prisma/client.js', () => {
         update: vi.fn(),
       },
       stockOperation: {
+        findUnique: vi.fn(),
+        findFirst: vi.fn(),
         count: vi.fn(),
         create: vi.fn(),
       },
