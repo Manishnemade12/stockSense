@@ -73,4 +73,27 @@ export class AuthController {
       next(error);
     }
   }
+
+  static async updateProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await AuthService.updateProfile(req.user!.userId, req.body);
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async changePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { current_password, new_password } = req.body;
+      const result = await AuthService.changePassword(
+        req.user!.userId,
+        current_password,
+        new_password
+      );
+      sendSuccess(res, result, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
 }

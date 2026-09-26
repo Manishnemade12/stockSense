@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Eye, EyeOff, Loader2, Lock, Package } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,10 +48,13 @@ function ResetPassword() {
     }
     setBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-      toast.success("Password updated successfully — Welcome to StockSense!");
-      navigate({ to: "/dashboard" });
+      const resetToken = typeof window !== "undefined" ? localStorage.getItem("stocksense_reset_token") : null;
+      await api.post("/auth/reset-password", {
+        new_password: password,
+        reset_token: resetToken,
+      });
+      toast.success("Password updated successfully — Please sign in with your new password!");
+      navigate({ to: "/auth" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not update password");
     } finally {

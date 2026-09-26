@@ -16,7 +16,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import { useIsManager, useSessionUserId, type AppRole } from "@/lib/auth";
 import { THEMES, type ThemeId } from "@/lib/themes";
 import { useTheme } from "@/components/theme-provider";
@@ -168,7 +168,7 @@ function SettingsPage() {
         </TabsContent>
         {isManager && (
           <TabsContent value="users" className="space-y-4">
-            <UsersTab currentUserId={userId} />
+            <UsersTab currentUserId={userId ?? undefined} />
           </TabsContent>
         )}
         <TabsContent value="theme" className="space-y-4">
@@ -280,13 +280,7 @@ function WarehousesTab({ isManager }: { isManager: boolean }) {
   const { data: rows, isLoading } = useQuery({
     queryKey: ["warehouses"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/warehouses");
     },
   });
 
@@ -320,15 +314,10 @@ function WarehousesTab({ isManager }: { isManager: boolean }) {
         address: address.trim() || null,
       };
       if (editing) {
-        const { error } = await supabase
-          .from("warehouses")
-          .update(payload)
-          .eq("id", editing.id);
-        if (error) throw error;
+        await api.put(`/warehouses/${editing.id}`, payload);
         toast.success("Warehouse updated");
       } else {
-        const { error } = await supabase.from("warehouses").insert(payload);
-        if (error) throw error;
+        await api.post("/warehouses", payload);
         toast.success("Warehouse created");
       }
       qc.invalidateQueries({ queryKey: ["warehouses"] });
@@ -342,26 +331,7 @@ function WarehousesTab({ isManager }: { isManager: boolean }) {
 
   async function handleDelete(id: number) {
     try {
-      // Check if warehouse is referenced by non-canceled operations
-      const { count, error: countErr } = await supabase
-        .from("stock_operations")
-        .select("*", { count: "exact", head: true })
-        .eq("warehouse_id", id)
-        .neq("status", "CANCELED");
-
-      if (countErr) throw countErr;
-      if (count && count > 0) {
-        toast.error(
-          `Cannot deactivate warehouse: referenced by ${count} active operation(s).`,
-        );
-        return;
-      }
-
-      const { error } = await supabase
-        .from("warehouses")
-        .update({ is_active: false })
-        .eq("id", id);
-      if (error) throw error;
+      await api.delete(`/warehouses/${id}`);
       toast.success("Warehouse deactivated");
       qc.invalidateQueries({ queryKey: ["warehouses"] });
     } catch (e) {
@@ -484,33 +454,18 @@ function LocationsTab({ isManager }: { isManager: boolean }) {
   const { data: warehouses } = useQuery({
     queryKey: ["warehouses"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id, name, code")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/warehouses");
     },
   });
 
   const { data: rows, isLoading } = useQuery({
     queryKey: ["locations", selectedWarehouseFilter],
     queryFn: async () => {
-      let q = supabase
-        .from("locations")
-        .select("*, warehouse:warehouses(id,name,code)")
-        .eq("is_active", true)
-        .eq("location_type", "INTERNAL")
-        .order("name");
-
+      const params: any = { location_type: "INTERNAL", limit: 100 };
       if (selectedWarehouseFilter !== "ALL") {
-        q = q.eq("warehouse_id", Number(selectedWarehouseFilter));
+        params.warehouse_id = selectedWarehouseFilter;
       }
-
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as any[];
+      return await api.get<any[]>("/locations", params);
     },
   });
 
@@ -518,14 +473,7 @@ function LocationsTab({ isManager }: { isManager: boolean }) {
   const { data: allLocations } = useQuery({
     queryKey: ["all-internal-locations"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locations")
-        .select("id, name, warehouse_id")
-        .eq("is_active", true)
-        .eq("location_type", "INTERNAL")
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/locations", { location_type: "INTERNAL", limit: 100 });
     },
   });
 
@@ -565,21 +513,16 @@ function LocationsTab({ isManager }: { isManager: boolean }) {
     try {
       const payload: any = {
         name: name.trim(),
-        code: code.trim(),
-        warehouse_id: Number(warehouseId),
-        parent_location_id: parentId ? Number(parentId) : null,
+        code: code.trim().toUpperCase(),
+        warehouse_id: String(warehouseId),
+        parent_location_id: parentId ? String(parentId) : null,
         location_type: "INTERNAL",
       };
       if (editing) {
-        const { error } = await supabase
-          .from("locations")
-          .update(payload)
-          .eq("id", editing.id);
-        if (error) throw error;
+        await api.put(`/locations/${editing.id}`, payload);
         toast.success("Location updated");
       } else {
-        const { error } = await supabase.from("locations").insert(payload);
-        if (error) throw error;
+        await api.post("/locations", payload);
         toast.success("Location created");
       }
       qc.invalidateQueries({ queryKey: ["locations"] });
@@ -594,23 +537,7 @@ function LocationsTab({ isManager }: { isManager: boolean }) {
 
   async function handleDelete(id: number) {
     try {
-      // Check if location is referenced by quants with stock
-      const { count: quantCount } = await supabase
-        .from("stock_quants")
-        .select("*", { count: "exact", head: true })
-        .eq("location_id", id)
-        .gt("quantity_on_hand", 0);
-
-      if (quantCount && quantCount > 0) {
-        toast.error("Cannot deactivate location: stock currently exists here");
-        return;
-      }
-
-      const { error } = await supabase
-        .from("locations")
-        .update({ is_active: false })
-        .eq("id", id);
-      if (error) throw error;
+      await api.delete(`/locations/${id}`);
       toast.success("Location deactivated");
       qc.invalidateQueries({ queryKey: ["locations"] });
       qc.invalidateQueries({ queryKey: ["all-internal-locations"] });
@@ -782,13 +709,7 @@ function CategoriesTab({ isManager }: { isManager: boolean }) {
   const { data: rows, isLoading } = useQuery({
     queryKey: ["categories"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("product_categories")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/categories");
     },
   });
 
@@ -818,20 +739,13 @@ function CategoriesTab({ isManager }: { isManager: boolean }) {
     try {
       const payload = {
         name: name.trim(),
-        parent_category_id: parentId ? Number(parentId) : null,
+        parent_category_id: parentId ? String(parentId) : null,
       };
       if (editing) {
-        const { error } = await supabase
-          .from("product_categories")
-          .update(payload)
-          .eq("id", editing.id);
-        if (error) throw error;
+        await api.put(`/categories/${editing.id}`, payload);
         toast.success("Category updated");
       } else {
-        const { error } = await supabase
-          .from("product_categories")
-          .insert(payload);
-        if (error) throw error;
+        await api.post("/categories", payload);
         toast.success("Category created");
       }
       qc.invalidateQueries({ queryKey: ["categories"] });
@@ -845,22 +759,7 @@ function CategoriesTab({ isManager }: { isManager: boolean }) {
 
   async function handleDelete(id: number) {
     try {
-      const { count: prodCount } = await supabase
-        .from("products")
-        .select("*", { count: "exact", head: true })
-        .eq("category_id", id)
-        .eq("is_active", true);
-
-      if (prodCount && prodCount > 0) {
-        toast.error(`Cannot deactivate: category is used by ${prodCount} product(s)`);
-        return;
-      }
-
-      const { error } = await supabase
-        .from("product_categories")
-        .update({ is_active: false })
-        .eq("id", id);
-      if (error) throw error;
+      await api.delete(`/categories/${id}`);
       toast.success("Category deactivated");
       qc.invalidateQueries({ queryKey: ["categories"] });
     } catch (e) {
@@ -975,13 +874,7 @@ function UomTab({ isManager }: { isManager: boolean }) {
   const { data: rows, isLoading } = useQuery({
     queryKey: ["uom"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("units_of_measure")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/uom");
     },
   });
 
@@ -1007,17 +900,12 @@ function UomTab({ isManager }: { isManager: boolean }) {
     }
     setBusy(true);
     try {
-      const payload = { name: name.trim(), code: code.trim() };
+      const payload = { name: name.trim(), code: code.trim().toLowerCase() };
       if (editing) {
-        const { error } = await supabase
-          .from("units_of_measure")
-          .update(payload)
-          .eq("id", editing.id);
-        if (error) throw error;
+        await api.put(`/uom/${editing.id}`, payload);
         toast.success("UoM updated");
       } else {
-        const { error } = await supabase.from("units_of_measure").insert(payload);
-        if (error) throw error;
+        await api.post("/uom", payload);
         toast.success("UoM created");
       }
       qc.invalidateQueries({ queryKey: ["uom"] });
@@ -1031,22 +919,7 @@ function UomTab({ isManager }: { isManager: boolean }) {
 
   async function handleDelete(id: number) {
     try {
-      const { count: prodCount } = await supabase
-        .from("products")
-        .select("*", { count: "exact", head: true })
-        .eq("uom_id", id)
-        .eq("is_active", true);
-
-      if (prodCount && prodCount > 0) {
-        toast.error(`Cannot deactivate: UoM is used by ${prodCount} product(s)`);
-        return;
-      }
-
-      const { error } = await supabase
-        .from("units_of_measure")
-        .update({ is_active: false })
-        .eq("id", id);
-      if (error) throw error;
+      await api.delete(`/uom/${id}`);
       toast.success("UoM deactivated");
       qc.invalidateQueries({ queryKey: ["uom"] });
     } catch (e) {
@@ -1154,13 +1027,7 @@ function PartnersTab({ isManager }: { isManager: boolean }) {
   const { data: rows, isLoading } = useQuery({
     queryKey: ["partners"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("partners")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/partners");
     },
   });
 
@@ -1204,15 +1071,10 @@ function PartnersTab({ isManager }: { isManager: boolean }) {
         address: address.trim() || null,
       };
       if (editing) {
-        const { error } = await supabase
-          .from("partners")
-          .update(payload)
-          .eq("id", editing.id);
-        if (error) throw error;
+        await api.put(`/partners/${editing.id}`, payload);
         toast.success("Partner updated");
       } else {
-        const { error } = await supabase.from("partners").insert(payload);
-        if (error) throw error;
+        await api.post("/partners", payload);
         toast.success("Partner created");
       }
       qc.invalidateQueries({ queryKey: ["partners"] });
@@ -1226,22 +1088,7 @@ function PartnersTab({ isManager }: { isManager: boolean }) {
 
   async function handleDelete(id: number) {
     try {
-      const { count: opsCount } = await supabase
-        .from("stock_operations")
-        .select("*", { count: "exact", head: true })
-        .eq("partner_id", id)
-        .neq("status", "CANCELED");
-
-      if (opsCount && opsCount > 0) {
-        toast.error(`Cannot deactivate: partner is referenced by ${opsCount} active operation(s)`);
-        return;
-      }
-
-      const { error } = await supabase
-        .from("partners")
-        .update({ is_active: false })
-        .eq("id", id);
-      if (error) throw error;
+      await api.delete(`/partners/${id}`);
       toast.success("Partner deactivated");
       qc.invalidateQueries({ queryKey: ["partners"] });
     } catch (e) {
@@ -1389,41 +1236,19 @@ function PartnersTab({ isManager }: { isManager: boolean }) {
 
 function UsersTab({ currentUserId }: { currentUserId?: string | undefined }) {
   const qc = useQueryClient();
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<number | string | null>(null);
 
   const { data: warehouses } = useQuery({
     queryKey: ["warehouses"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id, name, code")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      return await api.get<any[]>("/warehouses");
     },
   });
 
   const { data: users, isLoading } = useQuery({
     queryKey: ["all-users"],
     queryFn: async () => {
-      const { data: profiles, error: pErr } = await supabase
-        .from("profiles")
-        .select("*, warehouse:warehouses(id,name,code)")
-        .order("login_id");
-      if (pErr) throw pErr;
-
-      const { data: roles, error: rErr } = await supabase
-        .from("user_roles")
-        .select("user_id, role");
-      if (rErr) throw rErr;
-
-      const roleMap = new Map((roles ?? []).map((r) => [r.user_id, r.role]));
-
-      return (profiles ?? []).map((p) => ({
-        ...p,
-        role: (roleMap.get(p.id) ?? "WAREHOUSE_STAFF") as AppRole,
-      }));
+      return await api.get<any[]>("/users");
     },
   });
 
@@ -1442,21 +1267,19 @@ function UsersTab({ currentUserId }: { currentUserId?: string | undefined }) {
     const newIsActive =
       changes.is_active !== undefined ? changes.is_active : user.is_active;
 
-    if (user.id === currentUserId && newRole !== "INVENTORY_MANAGER") {
+    if (String(user.id) === String(currentUserId) && newRole !== "INVENTORY_MANAGER") {
       toast.error("You cannot demote your own account.");
       setUpdatingId(null);
       return;
     }
 
     try {
-      const { error } = await supabase.rpc("admin_update_user", {
-        _user_id: user.id,
-        _role: newRole,
-        _warehouse_id: (newWarehouseId ?? null) as unknown as number,
-        _is_active: newIsActive,
+      await api.put(`/users/${user.id}`, {
+        role: newRole,
+        warehouse_id: newWarehouseId,
+        is_active: newIsActive,
       });
 
-      if (error) throw error;
       toast.success("User permissions updated");
       qc.invalidateQueries({ queryKey: ["all-users"] });
     } catch (e) {
@@ -1498,8 +1321,8 @@ function UsersTab({ currentUserId }: { currentUserId?: string | undefined }) {
           </TableHeader>
           <TableBody>
             {(users ?? []).map((u) => {
-              const isSelf = u.id === currentUserId;
-              const isBusy = updatingId === u.id;
+              const isSelf = String(u.id) === String(currentUserId);
+              const isBusy = String(updatingId) === String(u.id);
 
               return (
                 <TableRow key={u.id} className={!u.is_active ? "opacity-60 bg-muted/20" : ""}>

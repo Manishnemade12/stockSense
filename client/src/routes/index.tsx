@@ -1,10 +1,10 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { supabase } from "@/integrations/supabase/client";
+import { getStoredToken } from "@/lib/auth";
 
 export const Route = createFileRoute("/")({
   ssr: false,
   beforeLoad: async () => {
-    const { data } = await supabase.auth.getUser();
-    throw redirect({ to: data.user ? "/dashboard" : "/auth" });
+    const token = getStoredToken();
+    throw redirect({ to: token ? "/dashboard" : "/auth" });
   },
 });

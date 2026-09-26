@@ -1,88 +1,117 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import type { Database } from "@/integrations/supabase/types";
+import { api } from "@/services/apiClient";
 
-export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
-export type AppRole = Database["public"]["Enums"]["app_role"];
+export type AppRole = "INVENTORY_MANAGER" | "WAREHOUSE_STAFF";
 
-/** Current auth user id, resolved once on mount. `undefined` = loading. */
+export interface UserProfile {
+  id: number | string;
+  login_id: string;
+  email: string;
+  full_name?: string | null;
+  role: AppRole;
+  warehouse_id?: number | null;
+  phone?: string | null;
+  is_verified?: boolean;
+  is_active?: boolean;
+}
+
+export type Profile = UserProfile;
+
+export function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("stocksense_token");
+}
+
+export function getStoredUser(): UserProfile | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("stocksense_user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredSession(token: string, user: UserProfile): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("stocksense_token", token);
+  localStorage.setItem("stocksense_user", JSON.stringify(user));
+}
+
+export function clearStoredSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("stocksense_token");
+  localStorage.removeItem("stocksense_user");
+}
+
+/** Current auth user id, resolved on mount. `undefined` = loading, `null` = unauthenticated. */
 export function useSessionUserId() {
-  const [userId, setUserId] = useState<string | undefined>(undefined);
+  const [userId, setUserId] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    let active = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (active) setUserId(data.user?.id ?? null as unknown as string | undefined);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user?.id ?? (null as unknown as string | undefined));
-    });
-    return () => {
-      active = false;
-      sub.subscription.unsubscribe();
-    };
+    const token = getStoredToken();
+    const user = getStoredUser();
+    if (token && user) {
+      setUserId(String(user.id));
+    } else {
+      setUserId(null);
+    }
   }, []);
 
   return userId;
 }
 
-export function useProfile(userId: string | undefined | null) {
+export function useProfile(userId?: string | null) {
   return useQuery({
     queryKey: ["profile", userId],
-    enabled: !!userId,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", userId!)
-        .single();
-      if (error) throw error;
-      return data as Profile;
-    },
-  });
-}
-
-export function useIsManager(userId: string | undefined | null) {
-  return useQuery({
-    queryKey: ["is-manager", userId],
-    enabled: !!userId,
-    queryFn: async () => {
+    queryFn: async (): Promise<UserProfile> => {
+      const stored = getStoredUser();
       try {
-        const { data, error } = await supabase.rpc("has_role", {
-          _user_id: userId!,
-          _role: "INVENTORY_MANAGER",
-        });
-        if (!error && typeof data === "boolean") return data;
+        const res = await api.get<{ user: UserProfile }>("/auth/me");
+        if (res?.user) {
+          localStorage.setItem("stocksense_user", JSON.stringify(res.user));
+          return res.user;
+        }
       } catch {
-        // Fallback to direct query below
+        if (stored) return stored;
       }
-      const { data } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", userId!)
-        .eq("role", "INVENTORY_MANAGER");
-      return !!(data && data.length > 0);
+      if (stored) return stored;
+      throw new Error("Unauthenticated");
     },
+    initialData: getStoredUser() || undefined,
+    staleTime: 60 * 1000,
   });
 }
 
-export function useUserRole(userId: string | undefined | null) {
+export function useIsManager(userId?: string | null) {
+  const { data: profile } = useProfile(userId);
   return useQuery({
-    queryKey: ["user-role", userId],
-    enabled: !!userId,
+    queryKey: ["is-manager", userId, profile?.role],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", userId!)
-        .maybeSingle();
-      const role = (data?.role as AppRole) ?? "WAREHOUSE_STAFF";
-      return {
-        role,
-        isManager: role === "INVENTORY_MANAGER",
-        isStaff: role === "WAREHOUSE_STAFF",
-      };
+      const role = profile?.role ?? getStoredUser()?.role;
+      return role === "INVENTORY_MANAGER";
+    },
+    initialData: (profile?.role ?? getStoredUser()?.role) === "INVENTORY_MANAGER",
+  });
+}
+
+export function useUserRole(userId?: string | null) {
+  const { data: profile } = useProfile(userId);
+  const role: AppRole = (profile?.role ?? getStoredUser()?.role) || "WAREHOUSE_STAFF";
+  const isManager = role === "INVENTORY_MANAGER";
+
+  return useQuery({
+    queryKey: ["user-role", userId, role],
+    queryFn: async () => ({
+      role,
+      isManager,
+      isStaff: !isManager,
+    }),
+    initialData: {
+      role,
+      isManager,
+      isStaff: !isManager,
     },
   });
 }

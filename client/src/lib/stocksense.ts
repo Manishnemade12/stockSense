@@ -1,13 +1,67 @@
-import { supabase } from "@/integrations/supabase/client";
-import type { Database } from "@/integrations/supabase/types";
+import { api } from "@/services/apiClient";
 
-export type OperationType = Database["public"]["Enums"]["operation_type"];
-export type OperationStatus = Database["public"]["Enums"]["operation_status"];
-export type StockOperation = Database["public"]["Tables"]["stock_operations"]["Row"];
-export type StockOperationLine =
-  Database["public"]["Tables"]["stock_operation_lines"]["Row"];
-export type StockAdjustmentLine =
-  Database["public"]["Tables"]["stock_adjustment_lines"]["Row"];
+export type OperationType =
+  | "RECEIPT"
+  | "DELIVERY"
+  | "INTERNAL_TRANSFER"
+  | "ADJUSTMENT";
+
+export type OperationStatus =
+  | "DRAFT"
+  | "WAITING"
+  | "READY"
+  | "DONE"
+  | "CANCELED";
+
+export interface StockOperation {
+  id: number;
+  reference_no: string;
+  operation_type: OperationType;
+  status: OperationStatus;
+  warehouse_id: number;
+  warehouse?: { id: number; name: string; code: string };
+  source_location_id?: number | null;
+  source_location?: { id: number; name: string; code: string; location_type?: string } | null;
+  destination_location_id?: number | null;
+  destination_location?: { id: number; name: string; code: string; location_type?: string } | null;
+  partner_id?: number | null;
+  partner?: { id: number; name: string; type?: string; email?: string; phone?: string; address?: string } | null;
+  scheduled_date?: string | null;
+  validated_date?: string | null;
+  created_by?: number | null;
+  responsible_user_id?: number | null;
+  notes?: string | null;
+  is_late?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  lines?: StockOperationLine[];
+}
+
+export interface StockOperationLine {
+  id: number;
+  operation_id?: number;
+  product_id: number;
+  product?: { id: number; name: string; sku: string };
+  uom_id?: number | null;
+  uom?: { id: number; name: string; code: string };
+  quantity_planned: number;
+  quantity_done: number;
+  notes?: string | null;
+  available_at_source?: number | null;
+  is_short?: boolean;
+}
+
+export interface StockAdjustmentLine {
+  id: number;
+  operation_id?: number;
+  product_id: number;
+  product?: { id: number; name: string; sku: string };
+  location_id: number;
+  location?: { id: number; name: string; code: string };
+  recorded_quantity: number;
+  counted_quantity: number;
+  notes?: string | null;
+}
 
 export const OP_META: Record<
   OperationType,
@@ -43,15 +97,6 @@ export const STATUS_STYLES: Record<OperationStatus, string> = {
   CANCELED: "bg-destructive/15 text-destructive",
 };
 
-function rpcError(error: { message: string } | null): never {
-  const msg = error?.message ?? "Something went wrong";
-  // Surface the friendly part of Postgres RAISE EXCEPTION messages
-  const clean = msg.replace(/^.*?:\s*/, (m) =>
-    m.includes("RAISE") ? "" : m,
-  );
-  throw new Error(clean);
-}
-
 export interface OperationLineInput {
   product_id: number;
   quantity_planned?: number;
@@ -59,6 +104,7 @@ export interface OperationLineInput {
   location_id?: number;
   counted_quantity?: number;
   id?: number;
+  notes?: string;
 }
 
 export interface OperationPayload {
@@ -67,45 +113,35 @@ export interface OperationPayload {
   source_location_id?: number | null;
   destination_location_id?: number | null;
   partner_id?: number | null;
-  responsible_user_id?: string | null;
+  responsible_user_id?: number | null;
   scheduled_date?: string;
   notes?: string;
   lines: OperationLineInput[];
 }
 
 export async function createOperation(payload: OperationPayload): Promise<number> {
-  const { data, error } = await supabase.rpc("create_operation", {
-    _payload: payload as never,
-  });
-  if (error) rpcError(error);
-  return data as number;
+  const data = await api.post<StockOperation>("/operations", payload);
+  return data.id;
 }
 
 export async function updateOperation(
   id: number,
   payload: Partial<OperationPayload>,
 ): Promise<void> {
-  const { error } = await supabase.rpc("update_operation", {
-    _id: id,
-    _payload: payload as never,
-  });
-  if (error) rpcError(error);
+  await api.put(`/operations/${id}`, payload);
 }
 
 export async function confirmOperation(id: number): Promise<OperationStatus> {
-  const { data, error } = await supabase.rpc("confirm_operation", { _id: id });
-  if (error) rpcError(error);
-  return data as OperationStatus;
+  const data = await api.post<StockOperation>(`/operations/${id}/confirm`);
+  return data.status;
 }
 
 export async function validateOperation(id: number): Promise<void> {
-  const { error } = await supabase.rpc("validate_operation", { _id: id });
-  if (error) rpcError(error);
+  await api.post(`/operations/${id}/validate`);
 }
 
 export async function cancelOperation(id: number): Promise<void> {
-  const { error } = await supabase.rpc("cancel_operation", { _id: id });
-  if (error) rpcError(error);
+  await api.post(`/operations/${id}/cancel`);
 }
 
 export async function setStock(
@@ -113,12 +149,9 @@ export async function setStock(
   locationId: number,
   counted: number,
 ): Promise<void> {
-  const { error } = await supabase.rpc("set_stock", {
-    _product: productId,
-    _location: locationId,
-    _counted: counted,
+  await api.put(`/products/${productId}/stock/${locationId}`, {
+    counted_quantity: counted,
   });
-  if (error) rpcError(error);
 }
 
 /** Free (unreserved) quantity of a product at a location. */
@@ -126,13 +159,13 @@ export async function freeQtyAt(
   productId: number,
   locationId: number,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from("stock_quants")
-    .select("quantity, reserved_quantity")
-    .eq("product_id", productId)
-    .eq("location_id", locationId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return 0;
-  return Number(data.quantity) - Number(data.reserved_quantity);
+  try {
+    const list = await api.get<Array<{ location_id: number; on_hand: number; reserved: number; free_to_use: number }>>(
+      `/products/${productId}/stock`
+    );
+    const item = list?.find((l) => l.location_id === locationId);
+    return item ? item.free_to_use : 0;
+  } catch {
+    return 0;
+  }
 }

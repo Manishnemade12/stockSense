@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import {
   confirmOperation,
   validateOperation,
@@ -102,49 +102,30 @@ function useMasters() {
   const warehouses = useQuery({
     queryKey: ["warehouses"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id,name,code")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/warehouses");
+      return data ?? [];
     },
   });
   const locations = useQuery({
     queryKey: ["locations"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locations")
-        .select("id,name,code,location_type,warehouse_id")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/locations");
+      return data ?? [];
     },
   });
   const partners = useQuery({
     queryKey: ["partners"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("partners")
-        .select("id,name,type,address")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/partners");
+      return data ?? [];
     },
   });
   const products = useQuery({
     queryKey: ["products-simple"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id,name,sku,uom_id")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const res = await api.get<any>("/products");
+      const items = Array.isArray(res) ? res : res?.items || [];
+      return items ?? [];
     },
   });
   return { warehouses, locations, partners, products };
@@ -180,25 +161,12 @@ function OperationsListPage() {
   const { data: ops, isLoading } = useQuery({
     queryKey: ["operations", opType, isManager ? "ALL" : profile?.warehouse_id],
     queryFn: async () => {
-      let query = supabase
-        .from("stock_operations")
-        .select(`
-          *,
-          partner:partners(id,name),
-          src:locations!stock_operations_source_location_id_fkey(id,name,code),
-          dst:locations!stock_operations_destination_location_id_fkey(id,name,code),
-          warehouse:warehouses(id,name,code)
-        `)
-        .eq("operation_type", opType)
-        .order("created_at", { ascending: false });
-
-      if (!isManager) {
-        query = query.eq("warehouse_id", profile?.warehouse_id || 1);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data as any[];
+      const data = await api.get<any[]>("/operations", {
+        type: opType,
+        warehouse_id: !isManager ? profile?.warehouse_id || 1 : undefined,
+        limit: 100,
+      });
+      return (data ?? []) as any[];
     },
   });
 
@@ -335,7 +303,7 @@ function OperationsListPage() {
           opType={opType}
           busy={busy}
           isManager={!!isManager}
-          userId={userId}
+          userId={userId ?? undefined}
           onConfirm={handleConfirm}
           onValidate={handleValidate}
           onCancel={(id) => setCancelTarget(id)}
@@ -348,7 +316,7 @@ function OperationsListPage() {
           opType={opType}
           busy={busy}
           isManager={!!isManager}
-          userId={userId}
+          userId={userId ?? undefined}
           onConfirm={handleConfirm}
           onValidate={handleValidate}
           onCancel={(id) => setCancelTarget(id)}
@@ -360,7 +328,7 @@ function OperationsListPage() {
       {showCreate && (
         <CreateOperationDialog
           opType={opType}
-          userId={userId}
+          userId={userId ?? undefined}
           isManager={!!isManager}
           profileWarehouseId={profile?.warehouse_id}
           onClose={() => setShowCreate(false)}
@@ -957,7 +925,7 @@ function CreateOperationDialog({
                     <SelectValue placeholder="Product" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(products.data ?? []).map((p) => (
+                    {(products.data ?? []).map((p: any) => (
                       <SelectItem key={p.id} value={String(p.id)}>
                         {p.name}{" "}
                         <span className="text-muted-foreground text-xs">

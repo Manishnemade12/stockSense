@@ -275,6 +275,7 @@ export class ProductService {
                 dto.reorder_max_qty !== null ? new Prisma.Decimal(dto.reorder_max_qty) : null,
             }
           : {}),
+        ...(dto.is_active !== undefined ? { is_active: dto.is_active } : {}),
       },
       include: {
         category: true,

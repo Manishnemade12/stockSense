@@ -20,7 +20,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import { setStock } from "@/lib/stocksense";
 import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -106,16 +106,9 @@ function useProductsList() {
   return useQuery({
     queryKey: ["products-full"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select(`
-          *,
-          product_categories(name),
-          units_of_measure(name, code)
-        `)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as ProductRecord[];
+      const res = await api.get<any>("/products", { limit: 100 });
+      const items = Array.isArray(res) ? res : res?.items || [];
+      return items as ProductRecord[];
     },
   });
 }
@@ -124,15 +117,7 @@ function useStockQuants() {
   return useQuery({
     queryKey: ["stock-quants-full"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("stock_quants")
-        .select(`
-          *,
-          products(id, name, sku, unit_cost, units_of_measure(code)),
-          locations(id, name, code, warehouse_id, warehouses(id, name, code))
-        `)
-        .order("product_id");
-      if (error) throw error;
+      const data = await api.get<any[]>("/products/quants/all");
       return data ?? [];
     },
   });
@@ -142,12 +127,7 @@ function useMasterMetadata() {
   const categories = useQuery({
     queryKey: ["categories-all"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("product_categories")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
+      const data = await api.get<any[]>("/categories");
       return data ?? [];
     },
   });
@@ -155,12 +135,7 @@ function useMasterMetadata() {
   const uoms = useQuery({
     queryKey: ["uoms-all"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("units_of_measure")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
+      const data = await api.get<any[]>("/uom");
       return data ?? [];
     },
   });
@@ -168,14 +143,8 @@ function useMasterMetadata() {
   const internalLocations = useQuery({
     queryKey: ["locations-internal"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locations")
-        .select("id, name, code, warehouse_id, warehouses(name, code)")
-        .eq("is_active", true)
-        .eq("location_type", "INTERNAL")
-        .order("name");
-      if (error) throw error;
-      return data ?? [];
+      const data = await api.get<any[]>("/locations");
+      return (data ?? []).filter((l: any) => l.location_type === "INTERNAL");
     },
   });
 
@@ -338,34 +307,11 @@ function ProductsCatalogTab({
   // Soft Delete / Toggle Active (§8 rule 7)
   const toggleActiveMutation = useMutation({
     mutationFn: async ({ id, is_active }: { id: number; is_active: boolean }) => {
-      // Check if product is in active operations before soft deleting
-      if (!is_active) {
-        const { data: lines, error: lineErr } = await supabase
-          .from("stock_operation_lines")
-          .select("id, operation:stock_operations(status)")
-          .eq("product_id", id)
-          .limit(10);
-
-        if (!lineErr && lines) {
-          const hasActiveOps = lines.some(
-            (l: any) =>
-              l.operation &&
-              l.operation.status !== "DONE" &&
-              l.operation.status !== "CANCELED",
-          );
-          if (hasActiveOps) {
-            throw new Error(
-              "Cannot archive product: It is currently referenced in an active/pending operation.",
-            );
-          }
-        }
+      if (is_active) {
+        await api.put(`/products/${id}`, { is_active: true });
+      } else {
+        await api.delete(`/products/${id}`);
       }
-
-      const { error } = await supabase
-        .from("products")
-        .update({ is_active, updated_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) throw error;
     },
     onSuccess: (_, vars) => {
       toast.success(vars.is_active ? "Product restored" : "Product archived");
@@ -919,54 +865,34 @@ function ProductDialog({
     setBusy(true);
     try {
       if (isEditing && productToEdit) {
-        // Update Product (§7: PUT /products/{id})
-        const { error } = await supabase
-          .from("products")
-          .update({
-            name: trimmedName,
-            sku: trimmedSku,
-            barcode: barcode.trim() || null,
-            category_id: catIdNum,
-            uom_id: uomIdNum,
-            unit_cost: Number(unitCost) || 0,
-            description: description.trim() || null,
-            reorder_min_qty: Number(reorderMin) || 0,
-            reorder_max_qty: reorderMax ? Number(reorderMax) : null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", productToEdit.id);
+        await api.put(`/products/${productToEdit.id}`, {
+          name: trimmedName,
+          barcode: barcode.trim() || undefined,
+          category_id: catIdNum,
+          uom_id: uomIdNum,
+          unit_cost: Number(unitCost) || 0,
+          description: description.trim() || undefined,
+          reorder_min_qty: Number(reorderMin) || 0,
+          reorder_max_qty: reorderMax ? Number(reorderMax) : undefined,
+        });
 
-        if (error) throw error;
         toast.success(`Product "${trimmedName}" updated successfully`);
       } else {
-        // Create Product (§7: POST /products)
-        const { data: newProd, error } = await supabase
-          .from("products")
-          .insert({
-            name: trimmedName,
-            sku: trimmedSku,
-            barcode: barcode.trim() || null,
-            category_id: catIdNum,
-            uom_id: uomIdNum,
-            unit_cost: Number(unitCost) || 0,
-            description: description.trim() || null,
-            reorder_min_qty: Number(reorderMin) || 0,
-            reorder_max_qty: reorderMax ? Number(reorderMax) : null,
-          })
-          .select("id")
-          .single();
+        await api.post("/products", {
+          name: trimmedName,
+          sku: trimmedSku,
+          barcode: barcode.trim() || undefined,
+          category_id: catIdNum,
+          uom_id: uomIdNum,
+          unit_cost: Number(unitCost) || 0,
+          description: description.trim() || undefined,
+          reorder_min_qty: Number(reorderMin) || 0,
+          reorder_max_qty: reorderMax ? Number(reorderMax) : undefined,
+          initial_stock_quantity: initQtyNum > 0 ? initQtyNum : undefined,
+          initial_stock_location_id: initQtyNum > 0 ? Number(initialStockLocationId) : undefined,
+        });
 
-        if (error) throw error;
-
-        // If Initial Stock was provided, log adjustment opening balance (§4.2, §7)
-        if (initQtyNum > 0 && initialStockLocationId && newProd) {
-          await setStock(newProd.id, Number(initialStockLocationId), initQtyNum);
-          toast.success(
-            `Product created with opening balance of ${initQtyNum} units`,
-          );
-        } else {
-          toast.success(`Product "${trimmedName}" created successfully`);
-        }
+        toast.success(`Product "${trimmedName}" created successfully`);
       }
 
       queryClient.invalidateQueries({ queryKey: ["products-full"] });

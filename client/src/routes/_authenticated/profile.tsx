@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Lock, ShieldCheck, User } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,13 +59,12 @@ function ProfilePage() {
     queryKey: ["warehouse", profile?.warehouse_id],
     enabled: !!profile?.warehouse_id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id, name, code")
-        .eq("id", profile!.warehouse_id!)
-        .single();
-      if (error) return null;
-      return data;
+      try {
+        const res = await api.get<any>(`/warehouses/${profile!.warehouse_id}`);
+        return res;
+      } catch {
+        return null;
+      }
     },
   });
 
@@ -74,15 +73,15 @@ function ProfilePage() {
     if (!userId) return;
     setProfileBusy(true);
     try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          full_name: fullName.trim() || null,
-          phone: phone.trim() || null,
-        })
-        .eq("id", userId);
+      const res = await api.put<{ user: any }>("/auth/me", {
+        full_name: fullName.trim() || null,
+        phone: phone.trim() || null,
+      });
 
-      if (error) throw error;
+      if (res?.user) {
+        localStorage.setItem("stocksense_user", JSON.stringify(res.user));
+      }
+
       toast.success("Profile updated successfully!");
       qc.invalidateQueries({ queryKey: ["profile", userId] });
     } catch (e) {
@@ -112,19 +111,10 @@ function ProfilePage() {
 
     setPwBusy(true);
     try {
-      // Re-authenticate first to verify current password
-      const { data: me } = await supabase.auth.getUser();
-      if (!me.user?.email) throw new Error("Session expired. Please log in again.");
-
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
-        email: me.user.email,
-        password: currentPassword,
+      await api.put("/auth/password", {
+        current_password: currentPassword,
+        new_password: newPassword,
       });
-
-      if (signInErr) throw new Error("Current password is incorrect.");
-
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw error;
 
       toast.success("Password changed successfully!");
       setCurrentPassword("");

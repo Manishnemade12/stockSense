@@ -21,8 +21,14 @@ import {
   SlidersHorizontal,
   User,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
+import {
+  clearStoredSession,
+  getStoredToken,
+  getStoredUser,
+  useIsManager,
+  useProfile,
+  useSessionUserId,
+} from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,9 +46,10 @@ import {
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async () => {
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) throw redirect({ to: "/auth" });
-    return { user: data.user };
+    const token = getStoredToken();
+    const user = getStoredUser();
+    if (!token || !user) throw redirect({ to: "/auth" });
+    return { user };
   },
   component: AuthenticatedLayout,
 });
@@ -73,7 +80,7 @@ function AuthenticatedLayout() {
   async function handleSignOut() {
     await queryClient.cancelQueries();
     queryClient.clear();
-    await supabase.auth.signOut();
+    clearStoredSession();
     navigate({ to: "/auth", replace: true });
   }
 

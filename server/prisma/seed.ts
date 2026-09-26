@@ -97,6 +97,58 @@ async function main() {
     console.log(`Admin user already exists: ${adminLoginId}`);
   }
 
+  // 5. Seed Central Warehouse & Stock Location
+  let wh1 = await prisma.warehouse.findUnique({ where: { code: 'WH1' } });
+  if (!wh1) {
+    wh1 = await prisma.warehouse.create({
+      data: {
+        name: 'Central Warehouse',
+        code: 'WH1',
+        address: '100 Industrial Parkway, Dock 4',
+      },
+    });
+    console.log('Created Central Warehouse (WH1)');
+  }
+
+  // Ensure default stock location for WH1
+  const wh1Stock = await prisma.location.findFirst({
+    where: { warehouse_id: wh1.id, code: 'STOCK' },
+  });
+  if (!wh1Stock) {
+    await prisma.location.create({
+      data: {
+        name: 'Central Stock',
+        code: 'STOCK',
+        warehouse_id: wh1.id,
+        location_type: LocationType.INTERNAL,
+      },
+    });
+    console.log('Created WH1 Central Stock location');
+  }
+
+  // 6. Seed Staff User
+  const staffLoginId = 'staff';
+  const existingStaff = await prisma.user.findUnique({
+    where: { login_id: staffLoginId },
+  });
+
+  if (!existingStaff) {
+    const staffPasswordHash = await bcrypt.hash('User@1234', 10);
+    await prisma.user.create({
+      data: {
+        login_id: staffLoginId,
+        email: 'staff@stocksense.local',
+        full_name: 'Warehouse Operator',
+        password_hash: staffPasswordHash,
+        role: UserRole.WAREHOUSE_STAFF,
+        warehouse_id: wh1.id,
+        is_verified: true,
+        is_active: true,
+      },
+    });
+    console.log(`Created staff user: ${staffLoginId} (Password: User@1234)`);
+  }
+
   console.log('✅ Seeding completed successfully.');
 }
 

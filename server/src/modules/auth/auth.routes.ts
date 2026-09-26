@@ -20,6 +20,8 @@ authRoutes.post('/forgot-password', validate(ForgotPasswordSchema), AuthControll
 authRoutes.post('/verify-reset-otp', validate(VerifyResetOtpSchema), AuthController.verifyResetOtp);
 authRoutes.post('/reset-password', validate(ResetPasswordSchema), AuthController.resetPassword);
 authRoutes.get('/me', authenticate, AuthController.getMe);
+authRoutes.put('/me', authenticate, AuthController.updateProfile);
+authRoutes.put('/password', authenticate, AuthController.changePassword);
 authRoutes.post('/logout', authenticate, AuthController.logout);
 
 export default authRoutes;

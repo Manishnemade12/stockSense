@@ -279,4 +279,34 @@ export class AuthService {
 
     return { user };
   }
+
+  static async updateProfile(userId: bigint, dto: { full_name?: string | null; phone?: string | null }) {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        full_name: dto.full_name !== undefined ? dto.full_name : undefined,
+        phone: dto.phone !== undefined ? dto.phone : undefined,
+      },
+      select: {
+        id: true,
+        login_id: true,
+        email: true,
+        full_name: true,
+        role: true,
+        warehouse_id: true,
+        phone: true,
+      },
+    });
+    return { user };
+  }
+
+  static async changePassword(userId: bigint, currentPassword: string, newPassword: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw Errors.notFound('User not found');
+    const valid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!valid) throw Errors.unauthorized('Current password is incorrect');
+    const hash = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: userId }, data: { password_hash: hash } });
+    return { message: 'Password updated successfully' };
+  }
 }

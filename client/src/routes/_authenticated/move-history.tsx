@@ -10,7 +10,7 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import {
   STATUS_STYLES,
   OP_META,
@@ -70,37 +70,22 @@ function useMasters() {
   const products = useQuery({
     queryKey: ["products-simple"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id,name,sku")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const res = await api.get<any>("/products");
+      return Array.isArray(res) ? res : res?.items || [];
     },
   });
   const locations = useQuery({
     queryKey: ["locations"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locations")
-        .select("id,name,code,location_type")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/locations");
+      return data ?? [];
     },
   });
   const warehouses = useQuery({
     queryKey: ["warehouses"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id,name,code")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/warehouses");
+      return data ?? [];
     },
   });
   return { products, locations, warehouses };
@@ -122,55 +107,32 @@ function useMoveHistory(filters: Filters) {
   return useQuery({
     queryKey: ["move-history", filters],
     queryFn: async () => {
-      // §6.8: One row per product line — NOT merged per operation
-      let q = supabase
-        .from("stock_operations")
-        .select(`
-          id, reference_no, operation_type, status, warehouse_id,
-          scheduled_date, validated_date, partner_id,
-          source_location_id, destination_location_id,
-          partner:partners(id,name),
-          src:locations!stock_operations_source_location_id_fkey(id,name,code),
-          dst:locations!stock_operations_destination_location_id_fkey(id,name,code),
-          stock_operation_lines(
-            id, product_id, quantity_planned, quantity_done,
-            product:products(id,name,sku)
-          ),
-          stock_adjustment_lines(
-            id, product_id, counted_quantity,
-            product:products(id,name,sku)
-          )
-        `)
-        .order("created_at", { ascending: false });
-
-      if (filters.opType && filters.opType !== "ALL") {
-        q = q.eq("operation_type", filters.opType as OperationType);
-      }
-      if (filters.warehouseId) {
-        q = q.eq("warehouse_id", Number(filters.warehouseId));
-      }
-      if (filters.dateFrom) {
-        q = q.gte("scheduled_date", filters.dateFrom);
-      }
-      if (filters.dateTo) {
-        q = q.lte("scheduled_date", filters.dateTo + "T23:59:59Z");
-      }
-
-      const { data, error } = await q;
-      if (error) throw error;
+      const ops = await api.get<any[]>("/operations", {
+        type: filters.opType && filters.opType !== "ALL" ? filters.opType : undefined,
+        warehouse_id: filters.warehouseId ? Number(filters.warehouseId) : undefined,
+        limit: 100,
+      });
 
       // Expand to one row per product line (per spec §6.8)
       const rows: any[] = [];
-      for (const op of data ?? []) {
-        const opLines = op.stock_operation_lines ?? [];
-        const adjLines = op.stock_adjustment_lines ?? [];
-        const lines = opLines.length > 0 ? opLines : adjLines;
+      for (const op of ops ?? []) {
+        const lines = op.lines ?? [];
 
         if (lines.length === 0) {
-          rows.push({ ...op, line: null });
+          rows.push({
+            ...op,
+            line: null,
+            src: op.source_location,
+            dst: op.destination_location,
+          });
         } else {
           for (const line of lines) {
-            rows.push({ ...op, line });
+            rows.push({
+              ...op,
+              line,
+              src: op.source_location,
+              dst: op.destination_location,
+            });
           }
         }
       }
@@ -411,7 +373,7 @@ function MoveHistoryPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="">All products</SelectItem>
-                {(products.data ?? []).map((p) => (
+                {(products.data ?? []).map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     {p.name}{" "}
                     <span className="text-muted-foreground text-xs">[{p.sku}]</span>

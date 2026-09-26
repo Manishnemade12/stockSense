@@ -16,7 +16,8 @@ import {
   User,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
+import { setStoredSession } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -84,6 +85,7 @@ function AuthPage() {
   const [forgotOtpCode, setForgotOtpCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
 
   // Resend cooldown timer
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -108,45 +110,27 @@ function AuthPage() {
     setUnverifiedEmail(null);
 
     try {
-      let email = id;
-      // Resolve email from login_id if user didn't enter an email
-      if (!id.includes("@")) {
-        const { data, error } = await supabase.rpc("email_for_login", {
-          _login_id: id,
-        });
-        if (error) throw error;
-        if (!data) {
-          throw new Error(`No account found for Login Id "${id}".`);
-        }
-        email = data as string;
-      }
-
-      const { data: authData, error } = await supabase.auth.signInWithPassword({
-        email,
+      const res = await api.post<{ user: any; token: string }>("/auth/login", {
+        login_id: id,
         password: loginPassword,
       });
 
-      if (error) {
-        // TDD Rule 8 & §6.1: If unverified, show specific message and offer OTP step
-        const isUnverified =
-          error.message.toLowerCase().includes("email not confirmed") ||
-          error.message.toLowerCase().includes("not confirmed") ||
-          error.message.toLowerCase().includes("unverified");
-
-        if (isUnverified) {
-          setUnverifiedEmail(email);
-          toast.error("Your account is not verified yet. Please enter the OTP sent to your email.");
-          return;
-        }
-        throw error;
-      }
-
-      if (authData.user) {
+      if (res?.token && res?.user) {
+        setStoredSession(res.token, res.user);
         toast.success("Welcome back! Signed in successfully.");
         navigate({ to: "/dashboard" });
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sign in failed");
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : "Sign in failed";
+      if (msg.toLowerCase().includes("verify your account")) {
+        setUnverifiedEmail(id);
+        setSuLoginId(id);
+        setMode("signup");
+        setSignupStep("otp");
+        toast.error("Please enter the verification code sent to your account.");
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -175,34 +159,18 @@ function AuthPage() {
 
     setBusy(true);
     try {
-      // Pre-flight duplicate check
-      const { data: check, error: checkErr } = await supabase.rpc(
-        "check_signup_available",
-        { _login_id: lid, _email: em },
-      );
-      if (checkErr) throw checkErr;
-
-      if (check === "LOGIN_ID_TAKEN") {
-        throw new Error(`Login ID "${lid}" is already taken. Please choose another.`);
-      }
-      if (check === "EMAIL_TAKEN") {
-        throw new Error(`Email "${em}" is already registered. Please sign in.`);
-      }
-
-      // Execute signup
-      const { error } = await supabase.auth.signUp({
+      const res = await api.post<{ message: string; otp_code?: string }>("/auth/signup", {
+        login_id: lid,
         email: em,
         password: suPassword,
-        options: {
-          data: { login_id: lid },
-          emailRedirectTo: window.location.origin,
-        },
       });
-      if (error) throw error;
 
-      toast.success(`Verification code sent to ${em}`);
+      toast.success(
+        res?.otp_code
+          ? `Code sent! (Dev OTP: ${res.otp_code})`
+          : `Verification code sent to ${em}`
+      );
       setResendCooldown(60);
-      // Immediately reveal the inline OTP step right after signup!
       setSignupStep("otp");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sign up failed";
@@ -217,27 +185,16 @@ function AuthPage() {
   async function handleVerifySignupOtp(e: React.FormEvent) {
     e.preventDefault();
     const code = suOtpCode.trim();
-    if (!code || !suEmail) return;
+    if (!code) return;
 
     setBusy(true);
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        email: suEmail.trim(),
-        token: code,
-        type: "signup",
+      await api.post("/auth/verify-signup-otp", {
+        login_id: suLoginId.trim() || suEmail.trim(),
+        otp_code: code,
       });
 
-      if (error) {
-        const { error: err2 } = await supabase.auth.verifyOtp({
-          email: suEmail.trim(),
-          token: code,
-          type: "email",
-        });
-        if (err2) throw error;
-      }
-
       toast.success("Account successfully verified! Please sign in.");
-      // Redirect to login form with login id pre-filled
       setLoginId(suLoginId);
       setMode("login");
       setSignupStep("form");
@@ -250,15 +207,18 @@ function AuthPage() {
   }
 
   async function handleResendSignupOtp() {
-    if (!suEmail.trim() || resendCooldown > 0) return;
+    if (!suLoginId.trim() && !suEmail.trim()) return;
+    if (resendCooldown > 0) return;
     setBusy(true);
     try {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email: suEmail.trim(),
+      const res = await api.post<{ message: string; otp_code?: string }>("/auth/forgot-password", {
+        login_id: suLoginId.trim() || suEmail.trim(),
       });
-      if (error) throw error;
-      toast.success(`Verification code resent to ${suEmail}`);
+      toast.success(
+        res?.otp_code
+          ? `Code resent! (Dev OTP: ${res.otp_code})`
+          : "Verification code resent."
+      );
       setResendCooldown(60);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not resend code");
@@ -277,26 +237,16 @@ function AuthPage() {
 
     setBusy(true);
     try {
-      let email = ident;
-      if (!ident.includes("@")) {
-        const { data: resolved, error: rpcErr } = await supabase.rpc(
-          "email_for_login",
-          { _login_id: ident },
-        );
-        if (rpcErr || !resolved) {
-          throw new Error(`No account found with Login Id "${ident}".`);
-        }
-        email = resolved as string;
-      }
-
-      setResolvedForgotEmail(email);
-
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      const res = await api.post<{ message: string; otp_code?: string }>("/auth/forgot-password", {
+        login_id: ident,
       });
-      if (error) throw error;
 
-      toast.success(`6-digit reset code sent to ${email}`);
+      setResolvedForgotEmail(ident);
+      toast.success(
+        res?.otp_code
+          ? `Reset code sent! (Dev OTP: ${res.otp_code})`
+          : `Reset code sent for ${ident}`
+      );
       setResendCooldown(60);
       setForgotStep(2);
     } catch (err) {
@@ -313,13 +263,14 @@ function AuthPage() {
 
     setBusy(true);
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        email: resolvedForgotEmail,
-        token: code,
-        type: "recovery",
+      const res = await api.post<{ reset_token: string }>("/auth/verify-reset-otp", {
+        login_id: forgotIdentifier.trim(),
+        otp_code: code,
       });
-      if (error) throw error;
 
+      if (res?.reset_token) {
+        setResetToken(res.reset_token);
+      }
       toast.success("OTP verified! Enter your new password below.");
       setForgotStep(3);
     } catch (err) {
@@ -342,13 +293,17 @@ function AuthPage() {
 
     setBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
+      await api.post("/auth/reset-password", {
+        reset_token: resetToken,
+        new_password: newPassword,
       });
-      if (error) throw error;
 
-      toast.success("Password reset successfully! Redirecting to dashboard...");
-      navigate({ to: "/dashboard" });
+      toast.success("Password reset successfully! Please sign in.");
+      setLoginId(forgotIdentifier);
+      setMode("login");
+      setForgotStep(1);
+      setNewPassword("");
+      setConfirmNewPassword("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not update password");
     } finally {

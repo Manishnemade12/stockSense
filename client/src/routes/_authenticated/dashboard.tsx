@@ -18,7 +18,7 @@ import {
   Warehouse,
   XCircle,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import { STATUS_STYLES, type OperationType, type OperationStatus } from "@/lib/stocksense";
 import { useIsManager, useProfile, useSessionUserId } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -88,13 +88,8 @@ function DashboardPage() {
   const { data: warehouses } = useQuery({
     queryKey: ["warehouses-simple"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id, name, code")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/warehouses");
+      return data || [];
     },
   });
 
@@ -106,33 +101,15 @@ function DashboardPage() {
   } = useQuery({
     queryKey: ["dashboard-operations", effectiveWarehouseId],
     queryFn: async () => {
-      let query = supabase
-        .from("stock_operations")
-        .select(`
-          id,
-          reference_no,
-          operation_type,
-          status,
-          scheduled_date,
-          warehouse_id,
-          created_at,
-          partner:partners(id, name),
-          src:locations!stock_operations_source_location_id_fkey(name, code),
-          dst:locations!stock_operations_destination_location_id_fkey(name, code)
-        `)
-        .order("created_at", { ascending: false });
-
-      if (effectiveWarehouseId !== null) {
-        query = query.eq("warehouse_id", effectiveWarehouseId);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/operations", {
+        warehouse_id: effectiveWarehouseId || undefined,
+        limit: 100,
+      });
+      return data || [];
     },
   });
 
-  // 3. Fetch Products and Stock Quants for inventory KPIs
+  // 3. Fetch Products and Stock KPIs from backend
   const {
     data: stockData,
     isLoading: stockLoading,
@@ -140,73 +117,16 @@ function DashboardPage() {
   } = useQuery({
     queryKey: ["dashboard-stock-kpis", effectiveWarehouseId],
     queryFn: async () => {
-      // Products
-      const { data: products, error: pErr } = await supabase
-        .from("products")
-        .select("id, name, sku, reorder_min_qty, is_active")
-        .eq("is_active", true);
-      if (pErr) throw pErr;
-
-      // Quants (with location to filter by warehouse if needed)
-      let quantsQuery = supabase
-        .from("stock_quants")
-        .select("product_id, quantity, reserved_quantity, location:locations(warehouse_id)");
-
-      const { data: quants, error: qErr } = await quantsQuery;
-      if (qErr) throw qErr;
-
-      // Filter quants by effective warehouse if selected
-      const filteredQuants =
-        effectiveWarehouseId === null
-          ? quants
-          : quants.filter(
-              (q: any) =>
-                q.location &&
-                Number(q.location.warehouse_id) === Number(effectiveWarehouseId),
-            );
-
-      // Quantities per product
-      const productQtyMap = new Map<number, { onHand: number; reserved: number }>();
-      let totalOnHand = 0;
-      let totalReserved = 0;
-
-      for (const q of filteredQuants) {
-        const pId = q.product_id;
-        const current = productQtyMap.get(pId) || { onHand: 0, reserved: 0 };
-        const qOnHand = Number(q.quantity) || 0;
-        const qReserved = Number(q.reserved_quantity) || 0;
-
-        current.onHand += qOnHand;
-        current.reserved += qReserved;
-        productQtyMap.set(pId, current);
-
-        totalOnHand += qOnHand;
-        totalReserved += qReserved;
-      }
-
-      // Calculations (§6.2 formulas)
-      const totalProducts = products.length;
-      let lowStockCount = 0;
-      let outOfStockCount = 0;
-
-      for (const p of products) {
-        const qty = productQtyMap.get(p.id)?.onHand ?? 0;
-        const minQty = Number(p.reorder_min_qty) || 0;
-
-        if (qty === 0) {
-          outOfStockCount++;
-        } else if (qty <= minQty) {
-          lowStockCount++;
-        }
-      }
-
+      const kpis = await api.get<any>("/dashboard/kpis", {
+        warehouse_id: effectiveWarehouseId || undefined,
+      });
       return {
-        totalProducts,
-        lowStockCount,
-        outOfStockCount,
-        totalOnHand,
-        totalReserved,
-        freeToUse: totalOnHand - totalReserved,
+        totalProducts: kpis?.total_products ?? 0,
+        lowStockCount: kpis?.low_stock_count ?? 0,
+        outOfStockCount: kpis?.out_of_stock_count ?? 0,
+        totalOnHand: kpis?.stock_summary?.on_hand ?? 0,
+        totalReserved: kpis?.stock_summary?.reserved ?? 0,
+        freeToUse: kpis?.stock_summary?.free_to_use ?? 0,
       };
     },
   });

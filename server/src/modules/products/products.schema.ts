@@ -42,6 +42,7 @@ export const UpdateProductSchema = z.object({
     description: z.string().trim().optional().nullable(),
     reorder_min_qty: z.coerce.number().min(0).optional(),
     reorder_max_qty: z.coerce.number().min(0).optional().nullable(),
+    is_active: z.boolean().optional(),
   }),
 });
 

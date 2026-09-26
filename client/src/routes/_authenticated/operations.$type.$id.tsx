@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/services/apiClient";
 import {
   confirmOperation,
   validateOperation,
@@ -86,13 +86,9 @@ function useProducts() {
   return useQuery({
     queryKey: ["products-simple"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id,name,sku,uom_id")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const res = await api.get<any>("/products");
+      const items = Array.isArray(res) ? res : res?.items || [];
+      return items ?? [];
     },
   });
 }
@@ -101,13 +97,8 @@ function useLocations() {
   return useQuery({
     queryKey: ["locations"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locations")
-        .select("id,name,code,location_type,warehouse_id")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return data;
+      const data = await api.get<any[]>("/locations");
+      return data ?? [];
     },
   });
 }
@@ -143,69 +134,13 @@ function OperationDetailPage() {
   const { data: op, isLoading, error } = useQuery({
     queryKey: ["operation", opId],
     queryFn: async () => {
-      if (opType === "ADJUSTMENT") {
-        const { data, error } = await supabase
-          .from("stock_operations")
-          .select(`
-            *,
-            warehouse:warehouses(id,name,code),
-            src:locations!stock_operations_source_location_id_fkey(id,name,code),
-            dst:locations!stock_operations_destination_location_id_fkey(id,name,code),
-            partner:partners(id,name,address),
-            responsible:profiles!stock_operations_responsible_user_id_fkey(id,full_name,login_id),
-            stock_adjustment_lines(
-              id, product_id, location_id, uom_id,
-              recorded_quantity, counted_quantity,
-              product:products(id,name,sku),
-              location:locations(id,name,code)
-            )
-          `)
-          .eq("id", opId)
-          .single();
-        if (error) throw error;
-        return data as any;
-      } else {
-        const { data, error } = await supabase
-          .from("stock_operations")
-          .select(`
-            *,
-            warehouse:warehouses(id,name,code),
-            src:locations!stock_operations_source_location_id_fkey(id,name,code),
-            dst:locations!stock_operations_destination_location_id_fkey(id,name,code),
-            partner:partners(id,name,address),
-            responsible:profiles!stock_operations_responsible_user_id_fkey(id,full_name,login_id),
-            stock_operation_lines(
-              id, product_id, uom_id,
-              quantity_planned, quantity_done,
-              product:products(id,name,sku)
-            )
-          `)
-          .eq("id", opId)
-          .single();
-        if (error) throw error;
-        // Compute is_short for delivery/transfer lines
-        if (opType === "DELIVERY" || opType === "INTERNAL_TRANSFER") {
-          const enrichedLines = await Promise.all(
-            (data.stock_operation_lines ?? []).map(async (line: any) => {
-              if (!data.source_location_id) return { ...line, is_short: false, available_at_source: 0 };
-              const { data: q } = await supabase
-                .from("stock_quants")
-                .select("quantity,reserved_quantity")
-                .eq("product_id", line.product_id)
-                .eq("location_id", data.source_location_id)
-                .maybeSingle();
-              const free = q ? Number(q.quantity) - Number(q.reserved_quantity) : 0;
-              return {
-                ...line,
-                available_at_source: free,
-                is_short: Number(line.quantity_planned) > free,
-              };
-            }),
-          );
-          return { ...data, stock_operation_lines: enrichedLines } as any;
-        }
-        return data as any;
-      }
+      const data = await api.get<any>(`/operations/${opId}`);
+      const lines = data?.lines || [];
+      return {
+        ...data,
+        stock_operation_lines: lines,
+        stock_adjustment_lines: lines,
+      };
     },
   });
 
@@ -321,21 +256,15 @@ function OperationDetailPage() {
   async function handleDeleteLine(lineId: number) {
     setBusy(true);
     try {
-      if (opType === "ADJUSTMENT") {
-        const { error } = await supabase
-          .from("stock_adjustment_lines")
-          .delete()
-          .eq("id", lineId)
-          .eq("operation_id", opId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("stock_operation_lines")
-          .delete()
-          .eq("id", lineId)
-          .eq("operation_id", opId);
-        if (error) throw error;
-      }
+      const remainingLines = (op?.lines ?? [])
+        .filter((l: any) => l.id !== lineId)
+        .map((l: any) => ({
+          product_id: l.product_id,
+          quantity_planned: l.quantity_planned,
+          quantity_done: l.quantity_done,
+          notes: l.notes,
+        }));
+      await updateOperation(opId, { lines: remainingLines });
       toast.success("Line removed");
       qc.invalidateQueries({ queryKey: ["operation", opId] });
     } catch (e) {
@@ -543,7 +472,7 @@ function OperationDetailPage() {
                       <SelectValue placeholder="Select product" />
                     </SelectTrigger>
                     <SelectContent>
-                      {(products ?? []).map((p) => (
+                      {(products ?? []).map((p: any) => (
                         <SelectItem key={p.id} value={String(p.id)}>
                           {p.name}{" "}
                           <span className="text-muted-foreground text-xs">[{p.sku}]</span>
